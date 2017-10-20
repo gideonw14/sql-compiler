@@ -1,1 +1,1 @@
-SELECT FROM WHERE;
+SELECT City.name, State.Code, State.name FROM City AS C, State AS S WHERE;

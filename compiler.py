@@ -10,11 +10,31 @@
 #
 # EOF (end-of-file) token is used to indicate that
 # there is no more input left for lexical analysis
-(INTEGER, PLUS, MINUS, MUL, DIV, LPAREN, RPAREN, ID, ASSIGN,
- BEGIN, END, SELECT, FROM, WHERE, SEMI, DOT, EOF, EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL, KEYWORD, COMMA ) = (
-    'INTEGER', 'PLUS', 'MINUS', 'MUL', 'DIV', '(', ')', 'ID', 'ASSIGN',
-    'BEGIN', 'END', 'SELECT', 'FROM', 'WHERE', 'SEMI', 'DOT', 'EOF', 'EQUAL', 'GREATER', 'LESSER', 'GREATEREQUAL', 'LESSEREQUAL', 'KEYWORD', 'COMMA'
-)
+INTEGER         = 'INTEGER'
+PLUS            = 'PLUS'
+MINUS           = 'MINUS'
+MUL             = 'MUL'
+LPAREN          = 'LPAREN'
+RPAREN          = 'RPAREN'
+ID              = 'ID'
+ASSIGN          = 'ASSIGN'
+SEMI            = 'SEMI'
+DOT             = 'DOT'
+COLON           = 'COLON'
+COMMA           = 'COMMA'
+EOF             = 'EOF'
+KEYWORD         = 'KEYWORD'
+SELECT          = 'SELECT'
+FROM            = 'FROM'
+WHERE           = 'WHERE'
+AS              = 'AS'
+AND             = 'AND'
+OR              = 'OR'
+EQUAL           = 'EQUAL'
+GREATER         = 'GREATER'
+LESSER          = 'LESSER'
+GREATEREQUAL    = 'GREATEREQUAL'
+LESSEREQUAL     = 'LESSEREQUAL'
 
 
 class Token(object):
@@ -44,7 +64,10 @@ RESERVED_KEYWORDS = {
     'END': Token('END', 'END'),
     'SELECT': Token('SELECT', 'SELECT'),
     'FROM': Token('FROM', 'FROM'),
-    'WHERE': Token('WHERE', 'WHERE')
+    'WHERE': Token('WHERE', 'WHERE'),
+    'AS': Token('AS', 'AS'),
+    'AND': Token('AND', 'AND'),
+    'OR': Token('OR', 'OR')
 }
 
 
@@ -230,6 +253,16 @@ class Var(AST):
         self.token = token
         self.value = token.value
 
+class Attr(AST):
+    def __init__(self, attribute, relation=None):
+        self.attribute = attribute
+        self.relation = relation
+
+class Rel(AST):
+    def __init__(self, relation, alias=None):
+        self.relation = relation
+        self.alias = alias
+
 
 class NoOp(AST):
     pass
@@ -268,10 +301,95 @@ class Parser(object):
         return node
 
     def sql_compound_statement(self):
+        """
+        sql_compound_statement: SELECT attribute_list
+                                FROM relation_list
+                                WHERE condition_list
+        """
         self.eat(SELECT)
+        attr_nodes = self.attribute_list()
         self.eat(FROM)
+        rel_nodes = self.relation_list()
         self.eat(WHERE)
-        return NoOp()
+        root = Compound()
+        for node in attr_nodes:
+            root.children.append(node)
+        for node in rel_nodes:
+            root.children.append(node)
+        return root
+
+    def attribute_list(self):
+        """
+        attribute_list : attribute
+                       | attribute COMMA attribute_list
+        """
+        node = self.attribute()
+        results = [node]
+        while self.current_token.type == COMMA:
+            self.eat(COMMA)
+            results.append(self.attribute())
+        return results
+
+    def attribute(self):
+        """
+        attribute : identifier
+                  | identifier DOT identifier
+
+        """
+        node = Attr(self.current_token)
+        self.eat(ID)
+        if self.current_token.type == DOT:
+            self.eat(DOT)
+            node.relation = node.attribute
+            node.attribute = self.current_token
+            self.eat(ID)
+        return node
+
+    def relation_list(self):
+        """
+        relation_list : relation
+                      | relation COMMA relation_list
+        """
+        node = self.relation()
+        results = [node]
+        while self.current_token.type == COMMA:
+            self.eat(COMMA)
+            results.append(self.relation())
+        return results
+
+    def relation(self):
+        """
+        relation : identifier
+                 | identifier AS identifier
+        """
+        node = Rel(self.current_token)
+        self.eat(ID)
+        if self.current_token.type == AS:
+            self.eat(AS)
+            node.alias = self.current_token
+            self.eat(ID)
+        return node
+
+    def condition_list(self):
+        """
+        condition_list : condition
+                       | condition (AND | OR) condition_list
+        """
+        node = self.condition()
+        results = [node]
+        while self.current_token.type in (AND, OR):
+            if self.current_token.type == AND:
+                self.eat(AND)
+            else:
+                self.eat(OR)
+            results.append(self.condition())
+        return results
+
+    def condition(self):
+        """
+        condition : attribute (EQUAL | GREATER | LESSER | GREATEREQUAL | LESSEREQUAL) (attribute | INTEGER | STRING)
+                  | attribute IN LPAREN sql_compound_statement RPAREN
+        """
 
     def compound_statement(self):
         """
@@ -507,6 +625,12 @@ class Interpreter(NodeVisitor):
             raise NameError(repr(var_name))
         else:
             return val
+
+    def visit_Attr(self, node):
+        pass
+
+    def visit_Rel(self, node):
+        pass
 
     def visit_NoOp(self, node):
         pass
