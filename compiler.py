@@ -11,6 +11,7 @@
 # EOF (end-of-file) token is used to indicate that
 # there is no more input left for lexical analysis
 INTEGER         = 'INTEGER'
+STRING          = 'STRING'
 PLUS            = 'PLUS'
 MINUS           = 'MINUS'
 MUL             = 'MUL'
@@ -28,6 +29,7 @@ SELECT          = 'SELECT'
 FROM            = 'FROM'
 WHERE           = 'WHERE'
 AS              = 'AS'
+IN              = 'IN'
 AND             = 'AND'
 OR              = 'OR'
 EQUAL           = 'EQUAL'
@@ -67,7 +69,8 @@ RESERVED_KEYWORDS = {
     'WHERE': Token('WHERE', 'WHERE'),
     'AS': Token('AS', 'AS'),
     'AND': Token('AND', 'AND'),
-    'OR': Token('OR', 'OR')
+    'OR': Token('OR', 'OR'),
+    'IN': Token('IN', 'IN')
 }
 
 
@@ -80,7 +83,7 @@ class Lexer(object):
         self.current_char = self.text[self.pos]
 
     def error(self):
-        raise Exception('Invalid character')
+        raise Exception('Invalid character near or at "{}"'.format(self.current_char))
 
     def advance(self):
         """Advance the `pos` pointer and set the `current_char` variable."""
@@ -109,6 +112,21 @@ class Lexer(object):
             self.advance()
         return int(result)
 
+    def string(self):
+        """ Return a string consumed from the input """
+        result = ''
+        if self.current_char == "'":
+            self.advance()
+        # import ipdb; ipdb.set_trace()
+        while self.current_char != "'":
+            result += str(self.current_char)
+            self.advance()
+        if self.current_char == "'":
+            self.advance()
+        else:
+            self.error()
+        return result
+
     def _id(self):
         """Handle identifiers and reserved keywords"""
         result = ''
@@ -136,6 +154,9 @@ class Lexer(object):
 
             if self.current_char.isdigit():
                 return Token(INTEGER, self.integer())
+
+            if self.current_char == "'":
+                return Token(STRING, self.string())
 
             if self.current_char == ':' and self.peek() == '=':
                 self.advance()
@@ -253,6 +274,12 @@ class Var(AST):
         self.token = token
         self.value = token.value
 
+class Rel_Alg_Select(AST):
+    def __init__(self, left, op, right):
+        self.left = left
+        self.token = self.op = op
+        self.right = right
+
 class Attr(AST):
     def __init__(self, attribute, relation=None):
         self.attribute = attribute
@@ -274,8 +301,8 @@ class Parser(object):
         # set current token to the first token taken from the input
         self.current_token = self.lexer.get_next_token()
 
-    def error(self, token):
-        raise Exception('Invalid syntax near {}'.format(token.value))
+    def error(self):
+        raise Exception('Invalid syntax near or at "{}"'.format(self.current_token.value))
 
     def eat(self, token_type):
         # compare the current token type with the passed token
@@ -286,13 +313,7 @@ class Parser(object):
             print(self.current_token)
             self.current_token = self.lexer.get_next_token()
         else:
-            self.error(self.current_token)
-
-    def program(self):
-        """program : compound_statement DOT"""
-        node = self.compound_statement()
-        self.eat(DOT)
-        return node
+            self.error()
 
     def query(self):
         # query: compound statement;
@@ -302,19 +323,26 @@ class Parser(object):
 
     def sql_compound_statement(self):
         """
+        note: ? means 0 or 1 instances
         sql_compound_statement: SELECT attribute_list
                                 FROM relation_list
                                 WHERE condition_list
+                                (GROUP BY attribute_list)?
+                                (HAVING condition_list)?
+                                (INTERSECT | UNION | EXCEPT sql_compound_statement)?
         """
         self.eat(SELECT)
         attr_nodes = self.attribute_list()
         self.eat(FROM)
         rel_nodes = self.relation_list()
         self.eat(WHERE)
+        cond_nodes = self.condition_list()
         root = Compound()
         for node in attr_nodes:
             root.children.append(node)
         for node in rel_nodes:
+            root.children.append(node)
+        for node in cond_nodes:
             root.children.append(node)
         return root
 
@@ -390,134 +418,39 @@ class Parser(object):
         condition : attribute (EQUAL | GREATER | LESSER | GREATEREQUAL | LESSEREQUAL) (attribute | INTEGER | STRING)
                   | attribute IN LPAREN sql_compound_statement RPAREN
         """
-
-    def compound_statement(self):
-        """
-        compound_statement: BEGIN statement_list END
-        """
-        self.eat(BEGIN)
-        nodes = self.statement_list()
-        self.eat(END)
-
-        root = Compound()
-        for node in nodes:
-            root.children.append(node)
-
-        return root
-
-    def statement_list(self):
-        """
-        statement_list : statement
-                       | statement SEMI statement_list
-        """
-        node = self.statement()
-
-        results = [node]
-
-        while self.current_token.type == SEMI:
-            self.eat(SEMI)
-            results.append(self.statement())
-
-        if self.current_token.type == ID:
-            self.error()
-
-        return results
-
-    def statement(self):
-        """
-        statement : compound_statement
-                  | assignment_statement
-                  | empty
-        """
-        if self.current_token.type == BEGIN:
-            node = self.compound_statement()
-        elif self.current_token.type == ID:
-            node = self.assignment_statement()
-        else:
-            node = self.empty()
-        return node
-
-    def assignment_statement(self):
-        """
-        assignment_statement : variable ASSIGN expr
-        """
-        left = self.variable()
-        token = self.current_token
-        self.eat(ASSIGN)
-        right = self.expr()
-        node = Assign(left, token, right)
-        return node
-
-    def variable(self):
-        """
-        variable : ID
-        """
-        node = Var(self.current_token)
-        self.eat(ID)
-        return node
-
-    def empty(self):
-        """An empty production"""
-        return NoOp()
-
-    def expr(self):
-        """
-        expr : term ((PLUS | MINUS) term)*
-        """
-        node = self.term()
-
-        while self.current_token.type in (PLUS, MINUS):
+        # Left is always attribute
+        left = self.attribute()
+        if self.current_token.type in (EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
+            # Comparison
             token = self.current_token
-            if token.type == PLUS:
-                self.eat(PLUS)
-            elif token.type == MINUS:
-                self.eat(MINUS)
+            if self.current_token.type == EQUAL:
+                self.eat(EQUAL)
+            elif self.current_token.type == GREATER:
+                self.eat(GREATER)
+            elif self.current_token.type == LESSER:
+                self.eat(LESSER)
+            elif self.current_token.type == GREATEREQUAL:
+                self.eat(GREATEREQUAL)
+            elif self.current_token.type == LESSEREQUAL:
+                self.eat(LESSEREQUAL)
+            else: # This *should* never happen
+                self.error()
 
-            node = BinOp(left=node, op=token, right=self.term())
-
-        return node
-
-    def term(self):
-        """term : factor ((MUL | DIV) factor)*"""
-        node = self.factor()
-
-        while self.current_token.type in (MUL, DIV):
-            token = self.current_token
-            if token.type == MUL:
-                self.eat(MUL)
-            elif token.type == DIV:
-                self.eat(DIV)
-
-            node = BinOp(left=node, op=token, right=self.factor())
-
-        return node
-
-    def factor(self):
-        """factor : PLUS factor
-                  | MINUS factor
-                  | INTEGER
-                  | LPAREN expr RPAREN
-                  | variable
-        """
-        token = self.current_token
-        if token.type == PLUS:
-            self.eat(PLUS)
-            node = UnaryOp(token, self.factor())
-            return node
-        elif token.type == MINUS:
-            self.eat(MINUS)
-            node = UnaryOp(token, self.factor())
-            return node
-        elif token.type == INTEGER:
-            self.eat(INTEGER)
-            return Num(token)
-        elif token.type == LPAREN:
+            # Right: integer, string, or attribute
+            if self.current_token.type == INTEGER:
+                right = self.current_token
+                self.eat(INTEGER)
+            elif self.current_token.type == STRING:
+                right = self.current_token
+                self.eat(STRING)
+            else: # attribute
+                right = self.attribute()
+            return Rel_Alg_Select(left, token, right)
+        elif self.current_token.type == IN:
+            self.eat(IN)
             self.eat(LPAREN)
-            node = self.expr()
+            node = self.sql_compound_statement()
             self.eat(RPAREN)
-            return node
-        else:
-            node = self.variable()
             return node
 
     def parse_sql(self):
@@ -526,41 +459,6 @@ class Parser(object):
         sql_compound_statement: SELECT attributes FROM (relations | query) WHERE (conditions | attributes IN query)
         """
         node = self.query()
-        if self.current_token.type != EOF:
-            self.error()
-
-        return node
-
-    def parse(self):
-        """
-        program : compound_statement DOT
-
-        compound_statement : BEGIN statement_list END
-
-        statement_list : statement
-                       | statement SEMI statement_list
-
-        statement : compound_statement
-                  | assignment_statement
-                  | empty
-
-        assignment_statement : variable ASSIGN expr
-
-        empty :
-
-        expr: term ((PLUS | MINUS) term)*
-
-        term: factor ((MUL | DIV) factor)*
-
-        factor : PLUS factor
-               | MINUS factor
-               | INTEGER
-               | LPAREN expr RPAREN
-               | variable
-
-        variable: ID
-        """
-        node = self.program()
         if self.current_token.type != EOF:
             self.error()
 
@@ -586,9 +484,15 @@ class NodeVisitor(object):
 class Interpreter(NodeVisitor):
 
     GLOBAL_SCOPE = {}
+    SELECTS = {}
+    PROJECTS = {}
+    CROSS_PRODUCTS = {}
 
     def __init__(self, parser):
         self.parser = parser
+
+    def visit_Rel_Alg_Select(self, node):
+        pass
 
     def visit_BinOp(self, node):
         if node.op.type == PLUS:
@@ -645,7 +549,7 @@ class Interpreter(NodeVisitor):
 def main():
     import sys
     text = open(sys.argv[1], 'r').read()
-
+    text = text.upper()
     lexer = Lexer(text)
     parser = Parser(lexer)
     interpreter = Interpreter(parser)

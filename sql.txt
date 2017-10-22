@@ -1,1 +1,1 @@
-SELECT City.name, State.Code, State.name FROM City AS C, State AS S WHERE;
+select sname from sailors where sailors.sid in (select reserves.bid, reserves.sid from reserves where attr='8/9/2016');
