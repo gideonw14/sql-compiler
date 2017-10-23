@@ -293,13 +293,19 @@ class Rel_Alg_Select(AST):
 
 class Attr(AST):
     def __init__(self, attribute, relation=None):
-        self.attribute = attribute
-        self.relation = relation
+        self.attribute = attribute.value
+        if relation:
+            self.relation = relation.value
+        else:
+            self.relation = None
 
 class Rel(AST):
     def __init__(self, relation, alias=None):
-        self.relation = relation
-        self.alias = alias
+        self.relation = relation.value
+        if alias:
+            self.alias = alias.value
+        else:
+            self.alias = None
 
 
 class NoOp(AST):
@@ -329,7 +335,7 @@ class Parser(object):
     def query(self):
         # query: compound statement;
         node = self.sql_compound_statement()
-        self.eat(SEMI)
+        # self.eat(SEMI)
         return node
 
     def sql_compound_statement(self):
@@ -342,12 +348,17 @@ class Parser(object):
                                 (HAVING condition_list)?
                                 (INTERSECT | UNION | EXCEPT sql_compound_statement)?
         """
+        cond_nodes = None
+        group_by_list = None
+        having_list = None
+        compound_statement = None
         self.eat(SELECT)
         attr_nodes = self.attribute_list()
         self.eat(FROM)
         rel_nodes = self.relation_list()
-        self.eat(WHERE)
-        cond_nodes = self.condition_list()
+        if self.current_token.type == WHERE:
+            self.eat(WHERE)
+            cond_nodes = self.condition_list()
         if self.current_token.type == GROUPBY:
             self.eat(GROUPBY)
             group_by_list = self.attribute_list()
@@ -368,8 +379,12 @@ class Parser(object):
             root.children.append(node)
         for node in rel_nodes:
             root.children.append(node)
-        for node in cond_nodes:
-            root.children.append(node)
+        if cond_nodes:
+            for node in cond_nodes:
+                root.children.append(node)
+        if having_list:
+            for node in having_list:
+                root.children.append(node)
         return root
 
     def attribute_list(self):
@@ -399,7 +414,7 @@ class Parser(object):
             if self.current_token.type == DOT:
                 self.eat(DOT)
                 node.relation = node.attribute
-                node.attribute = self.current_token
+                node.attribute = self.current_token.value
                 self.eat(ID)
         return node
 
@@ -424,7 +439,7 @@ class Parser(object):
         self.eat(ID)
         if self.current_token.type == AS:
             self.eat(AS)
-            node.alias = self.current_token
+            node.alias = self.current_token.value
             self.eat(ID)
         return node
 
@@ -514,15 +529,28 @@ class NodeVisitor(object):
 class Interpreter(NodeVisitor):
 
     GLOBAL_SCOPE = {}
-    SELECTS = {}
-    PROJECTS = {}
-    CROSS_PRODUCTS = {}
+    SELECTS = list()
+    PROJECTS = list()
+    CROSS_PRODUCTS = list()
 
     def __init__(self, parser):
         self.parser = parser
 
     def visit_Rel_Alg_Select(self, node):
-        pass
+        if node.left.relation: # always attribute
+            left = node.left.relation + '.' + node.left.attribute
+        else:
+            left = node.left.attribute
+
+        if isinstance(node.right, Attr):
+            if node.right.relation:
+                right = node.right.relation + '.' + node.right.attribute
+            else:
+                right = node.right.attribute
+        else:
+            right = node.right.value
+        result = left +' '+ node.op.value +' '+ right
+        self.SELECTS.append(result)
 
     def visit_BinOp(self, node):
         if node.op.type == PLUS:
@@ -561,10 +589,18 @@ class Interpreter(NodeVisitor):
             return val
 
     def visit_Attr(self, node):
-        pass
+        atr_name = node.attribute
+        if node.relation:
+            rel_name = node.relation
+            atr_name = rel_name + '.' + atr_name
+        self.PROJECTS.append(atr_name)
 
     def visit_Rel(self, node):
-        pass
+        rel_name = list()
+        rel_name.append(node.relation)
+        if node.alias:
+            rel_name.append(node.alias)
+        self.CROSS_PRODUCTS.append(rel_name)
 
     def visit_NoOp(self, node):
         pass
@@ -579,12 +615,16 @@ class Interpreter(NodeVisitor):
 def main():
     import sys
     text = open(sys.argv[1], 'r').read()
+    tables = open(sys.argv[2], 'r').read()
+
     text = text.upper()
     lexer = Lexer(text)
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    # print(interpreter.GLOBAL_SCOPE)
+    print(interpreter.CROSS_PRODUCTS)
+    print(interpreter.PROJECTS)
+    print(interpreter.SELECTS)
 
 
 if __name__ == '__main__':
