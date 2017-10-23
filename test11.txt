@@ -1,0 +1,5 @@
+SELECT B.bid, Count (*) AS reservationcount
+FROM Boats B, Reserves R
+WHERE R.bid=B.bid AND B.color = 'red'
+GROUP BY B.bid
+HAVING B.color = 'red';

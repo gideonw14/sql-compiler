@@ -30,6 +30,11 @@ FROM            = 'FROM'
 WHERE           = 'WHERE'
 AS              = 'AS'
 IN              = 'IN'
+INTERSECT       = 'INTERSECT'
+UNION           = 'UNION'
+EXCEPT          = 'EXCEPT'
+HAVING          = 'HAVING'
+GROUPBY         = 'GROUPBY'
 AND             = 'AND'
 OR              = 'OR'
 EQUAL           = 'EQUAL'
@@ -70,7 +75,13 @@ RESERVED_KEYWORDS = {
     'AS': Token('AS', 'AS'),
     'AND': Token('AND', 'AND'),
     'OR': Token('OR', 'OR'),
-    'IN': Token('IN', 'IN')
+    'IN': Token('IN', 'IN'),
+    'INTERSECT': Token('INTERSECT', 'INTERSECT'),
+    'UNION': Token('UNION', 'UNION'),
+    'EXCEPT': Token('EXCEPT', 'EXCEPT'),
+    'HAVING': Token('HAVING', 'HAVING'),
+    'GROUPBY': Token('GROUPBY', 'GROUPBY'),
+
 }
 
 
@@ -337,6 +348,21 @@ class Parser(object):
         rel_nodes = self.relation_list()
         self.eat(WHERE)
         cond_nodes = self.condition_list()
+        if self.current_token.type == GROUPBY:
+            self.eat(GROUPBY)
+            group_by_list = self.attribute_list()
+        if self.current_token.type == HAVING:
+            self.eat(HAVING)
+            having_list = self.condition_list()
+        if self.current_token.type in (INTERSECT, UNION, EXCEPT):
+            if self.current_token.type == INTERSECT:
+                self.eat(INTERSECT)
+            elif self.current_token.type == UNION:
+                self.eat(UNION)
+            elif self.current_token.type == EXCEPT:
+                self.eat(EXCEPT)
+            compound_statement = self.sql_compound_statement()
+
         root = Compound()
         for node in attr_nodes:
             root.children.append(node)
@@ -362,15 +388,19 @@ class Parser(object):
         """
         attribute : identifier
                   | identifier DOT identifier
+                  | STAR aka MUL
 
         """
         node = Attr(self.current_token)
-        self.eat(ID)
-        if self.current_token.type == DOT:
-            self.eat(DOT)
-            node.relation = node.attribute
-            node.attribute = self.current_token
+        if self.current_token.type == MUL:
+            self.eat(MUL)
+        else:
             self.eat(ID)
+            if self.current_token.type == DOT:
+                self.eat(DOT)
+                node.relation = node.attribute
+                node.attribute = self.current_token
+                self.eat(ID)
         return node
 
     def relation_list(self):
