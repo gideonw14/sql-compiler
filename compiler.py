@@ -43,6 +43,20 @@ LESSER          = 'LESSER'
 GREATEREQUAL    = 'GREATEREQUAL'
 LESSEREQUAL     = 'LESSEREQUAL'
 
+SPACES = 8
+# Helper Function
+def flatten(S):
+    if S == []:
+        return S
+    if isinstance(S[0], list):
+        return flatten(S[0]) + flatten(S[1:])
+    return S[:1] + flatten(S[1:])
+
+class Tree_Node(object):
+    def __init__(self, left, right, value):
+        self.left = left
+        self.right = right
+        self.value = value
 
 class Token(object):
     def __init__(self, type, value):
@@ -210,14 +224,6 @@ class Lexer(object):
                 self.advance()
                 return Token(EQUAL, '=')
 
-            if self.current_char == '>':
-                self.advance()
-                return Token(GREATER, '>')
-
-            if self.current_char == '<':
-                self.advance()
-                return Token(LESSER, '<')
-
             if self.current_char == '>' and self.peek() == '=':
                 self.advance()
                 self.advance()
@@ -227,6 +233,14 @@ class Lexer(object):
                 self.advance()
                 self.advance()
                 return Token(LESSEREQUAL, '<=')
+
+            if self.current_char == '>':
+                self.advance()
+                return Token(GREATER, '>')
+
+            if self.current_char == '<':
+                self.advance()
+                return Token(LESSER, '<')
 
             if self.current_char == ',':
                 self.advance()
@@ -312,6 +326,10 @@ class NoOp(AST):
     pass
 
 
+class In(AST):
+    def __init__(self, attribute, select):
+        pass
+
 class Parser(object):
     def __init__(self, lexer):
         self.lexer = lexer
@@ -343,7 +361,7 @@ class Parser(object):
         note: ? means 0 or 1 instances
         sql_compound_statement: SELECT attribute_list
                                 FROM relation_list
-                                WHERE condition_list
+                                (WHERE condition_list)?
                                 (GROUP BY attribute_list)?
                                 (HAVING condition_list)?
                                 (INTERSECT | UNION | EXCEPT sql_compound_statement)?
@@ -373,7 +391,7 @@ class Parser(object):
             elif self.current_token.type == EXCEPT:
                 self.eat(EXCEPT)
             compound_statement = self.sql_compound_statement()
-
+        roots = list()
         root = Compound()
         for node in attr_nodes:
             root.children.append(node)
@@ -382,10 +400,18 @@ class Parser(object):
         if cond_nodes:
             for node in cond_nodes:
                 root.children.append(node)
+        if group_by_list:
+            for node in group_by_list:
+                root.children.append(node)
         if having_list:
             for node in having_list:
                 root.children.append(node)
-        return root
+        if compound_statement:
+            compound_statement.append(root)
+            return compound_statement
+        else:
+            roots.append(root)
+            return roots
 
     def attribute_list(self):
         """
@@ -495,7 +521,9 @@ class Parser(object):
             self.eat(IN)
             self.eat(LPAREN)
             node = self.sql_compound_statement()
+            right = node[0].children.pop(0) # only 1 attribute on IN
             self.eat(RPAREN)
+            node[0].children.append(Rel_Alg_Select(left, Token(EQUAL, '='), right))
             return node
 
     def parse_sql(self):
@@ -548,9 +576,13 @@ class Interpreter(NodeVisitor):
             else:
                 right = node.right.attribute
         else:
-            right = node.right.value
+            right = str(node.right.value)
         result = left +' '+ node.op.value +' '+ right
         self.SELECTS.append(result)
+
+    def visit_list(self, node):
+        for item in node:
+            self.visit(item)
 
     def visit_BinOp(self, node):
         if node.op.type == PLUS:
@@ -605,12 +637,100 @@ class Interpreter(NodeVisitor):
     def visit_NoOp(self, node):
         pass
 
+
     def interpret(self):
         tree = self.parser.parse_sql()
         if tree is None:
             return ''
         return self.visit(tree)
 
+def print_rel_alg(interpreter):
+    print('######################################')
+    print('#          Relation Algebra          #')
+    print('######################################\n')
+    print('PROJECT [', end='')
+    for idx, item in enumerate(interpreter.PROJECTS):
+        if idx == len(interpreter.PROJECTS) - 1:
+            print(item, end='')
+        else:
+            print('{}, '.format(item), end='')
+    print('] (SELECT [', end='')
+    for idx, item in enumerate(interpreter.SELECTS):
+        if idx == len(interpreter.SELECTS) - 1:
+            print(item, end='')
+        else:
+            print('{}, '.format(item), end='')
+    print('] (', end='')
+    for idx, list in enumerate(interpreter.CROSS_PRODUCTS):
+        if idx == len(interpreter.CROSS_PRODUCTS) - 1:
+            if len(list) == 1:
+                print(list[0], end='')
+            else:
+                print('{} AS {}'.format(list[0], list[1]), end='')
+        else:
+            if len(list) == 1:
+                print('{} X '.format(list[0]), end='')
+            else:
+                print('{} AS {} X '.format(list[0], list[1]), end='')
+    print(')))\n')
+
+def build_query_tree(interpreter):
+    project = 'PROJECT ['
+    for idx, item in enumerate(interpreter.PROJECTS):
+        if idx == len(interpreter.PROJECTS) - 1:
+            project += item
+        else:
+            project += '{}, '.format(item)
+    project += ']'
+    tree = Tree_Node(None, None, project)
+    select = 'SELECT ['
+    for idx, item in enumerate(interpreter.SELECTS):
+        if idx == len(interpreter.SELECTS) - 1:
+            select += item
+        else:
+            select += '{}, '.format(item)
+    select += ']'
+    select_node = Tree_Node(None, None, select)
+    tree.left = select_node
+    cross_node = build_cross_tree(interpreter.CROSS_PRODUCTS)
+    tree.left.left = cross_node
+    return tree
+
+def build_cross_tree(cross_prods):
+    node = Tree_Node(None, None, None)
+    if len(cross_prods) == 1:
+        node.value = cross_prods[0]
+        return node
+    elif len(cross_prods) == 2:
+        node.left = Tree_Node(None, None, cross_prods[0])
+        node.right = Tree_Node(None, None, cross_prods[1])
+        node.value = 'X'
+        return node
+    else:
+        node.right = Tree_Node(None, None, cross_prods.pop(0))
+        node.left = build_cross_tree(cross_prods)
+        node.value = 'X'
+        return node
+
+def print_query_tree(tree, spaces):
+    if tree:
+        spaces += SPACES
+        print_query_tree(tree.right, spaces)
+        spaces -= SPACES
+        if tree.right != None:
+            print(' ' * spaces, end='')
+            print('/')
+        if spaces != 0:
+            print(' '*(spaces - SPACES), end='')
+            print(' |' + '-'*(SPACES-2), end='')
+        print(tree.value)
+        if tree.left != None:
+            print(' ' * spaces, end='')
+            print('\\')
+        spaces += SPACES
+        print_query_tree(tree.left, spaces)
+        spaces -= SPACES
+    return
 
 def main():
     import sys
@@ -622,9 +742,12 @@ def main():
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    print(interpreter.CROSS_PRODUCTS)
-    print(interpreter.PROJECTS)
-    print(interpreter.SELECTS)
+    print_rel_alg(interpreter)
+    tree = build_query_tree(interpreter)
+    print('######################################')
+    print('#            Query Tree              #')
+    print('######################################\n')
+    print_query_tree(tree, 0)
 
 
 if __name__ == '__main__':

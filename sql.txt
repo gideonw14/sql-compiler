@@ -1,3 +1,5 @@
 SELECT S.sname
-FROM Sailors AS S, Reserves AS R, Boats AS B
-WHERE S.sid=R.sid AND R.bid=B.bid AND B.color='red'
+FROM Sailors AS S
+WHERE S.sid IN ( SELECT R.sid
+ FROM Reserve AS R
+ WHERE R.bid IN(SELECT B.bid FROM A, B WHERE A.type = 'cool' AND B.color='green'))

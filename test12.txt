@@ -5,4 +5,4 @@ WHERE Sailor.sid IN (SELECT Reserves.bid, Reserves.sid
  CONTAINS
  (SELECT Boats.bid
  FROM Boats
- WHERE Boats.name = 'interlake') );
+ WHERE Boats.name = 'interlake') )
