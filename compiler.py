@@ -321,6 +321,12 @@ class Rel(AST):
         else:
             self.alias = None
 
+class Combo(AST):
+    def __init__(self, left, op, right):
+        self.left = left
+        self.op = op
+        self.right = right
+
 
 class NoOp(AST):
     pass
@@ -370,6 +376,7 @@ class Parser(object):
         group_by_list = None
         having_list = None
         compound_statement = None
+        set_op = None
         self.eat(SELECT)
         attr_nodes = self.attribute_list()
         self.eat(FROM)
@@ -384,6 +391,7 @@ class Parser(object):
             self.eat(HAVING)
             having_list = self.condition_list()
         if self.current_token.type in (INTERSECT, UNION, EXCEPT):
+            set_op = Combo(None, self.current_token.value, None)
             if self.current_token.type == INTERSECT:
                 self.eat(INTERSECT)
             elif self.current_token.type == UNION:
@@ -407,8 +415,9 @@ class Parser(object):
             for node in having_list:
                 root.children.append(node)
         if compound_statement:
-            compound_statement.append(root)
-            return compound_statement
+            set_op.left = root
+            set_op.right = compound_statement
+            return set_op
         else:
             roots.append(root)
             return roots
@@ -554,12 +563,23 @@ class NodeVisitor(object):
         raise Exception('No visit_{} method'.format(type(node).__name__))
 
 
+class Query(object):
+    def __init__(self, selects=list(), projects=list(), cross=list()):
+        self.selects = selects
+        self.projects = projects
+        self.cross = cross
+
+class Union_Inter_Diff(object):
+    def __init__(self, query1, query2, op):
+        self.query1 = query1
+        self.query2 = query2
+        self.op = op
+
 class Interpreter(NodeVisitor):
 
     GLOBAL_SCOPE = {}
-    SELECTS = list()
-    PROJECTS = list()
-    CROSS_PRODUCTS = list()
+    QUERIES = list() # list of queries
+    UNION_INTER_DIFFS = list() # list of unions/intersections/differences
 
     def __init__(self, parser):
         self.parser = parser
@@ -578,21 +598,11 @@ class Interpreter(NodeVisitor):
         else:
             right = str(node.right.value)
         result = left +' '+ node.op.value +' '+ right
-        self.SELECTS.append(result)
+        self.QUERIES[-1].selects.append(result)
 
     def visit_list(self, node):
         for item in node:
             self.visit(item)
-
-    def visit_BinOp(self, node):
-        if node.op.type == PLUS:
-            return self.visit(node.left) + self.visit(node.right)
-        elif node.op.type == MINUS:
-            return self.visit(node.left) - self.visit(node.right)
-        elif node.op.type == MUL:
-            return self.visit(node.left) * self.visit(node.right)
-        elif node.op.type == DIV:
-            return self.visit(node.left) / self.visit(node.right)
 
     def visit_Num(self, node):
         return node.value
@@ -605,8 +615,11 @@ class Interpreter(NodeVisitor):
             return -self.visit(node.expr)
 
     def visit_Compound(self, node):
+        self.QUERIES.append(Query())
+        index = len(self.QUERIES) - 1
         for child in node.children:
             self.visit(child)
+        return index
 
     def visit_Assign(self, node):
         var_name = node.left.value
@@ -625,14 +638,20 @@ class Interpreter(NodeVisitor):
         if node.relation:
             rel_name = node.relation
             atr_name = rel_name + '.' + atr_name
-        self.PROJECTS.append(atr_name)
+        self.QUERIES[-1].projects.append(atr_name)
 
     def visit_Rel(self, node):
         rel_name = list()
         rel_name.append(node.relation)
         if node.alias:
             rel_name.append(node.alias)
-        self.CROSS_PRODUCTS.append(rel_name)
+        self.QUERIES[-1].cross.append(rel_name)
+
+    def visit_Combo(self, node):
+        import ipdb; ipdb.set_trace()
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        self.UNION_INTER_DIFFS.append(Union_Inter_Diff(left, right, node.op))
 
     def visit_NoOp(self, node):
         pass
@@ -699,15 +718,36 @@ def build_query_tree(interpreter):
 def build_cross_tree(cross_prods):
     node = Tree_Node(None, None, None)
     if len(cross_prods) == 1:
-        node.value = cross_prods[0]
+        if len(cross_prods[0]) == 1:
+            node.value = cross_prods[0][0]
+        else:
+            node.value = '{} AS {}'.format(cross_prods[0][0], cross_prods[0][1])
         return node
     elif len(cross_prods) == 2:
-        node.left = Tree_Node(None, None, cross_prods[0])
-        node.right = Tree_Node(None, None, cross_prods[1])
+        right_node = Tree_Node(None, None, None)
+        left_node = Tree_Node(None, None, None)
+        right = cross_prods[1]
+        left = cross_prods[0]
+        if len(right) == 1:
+            right_node.value = right[0]
+        else:
+            right_node.value = '{} AS {}'.format(right[0], right[1])
+        if len(left) == 1:
+            left_node.value = left[0]
+        else:
+            left_node.value = '{} AS {}'.format(left[0], left[1])
+        node.left = left_node
+        node.right = right_node
         node.value = 'X'
         return node
     else:
-        node.right = Tree_Node(None, None, cross_prods.pop(0))
+        right = cross_prods.pop(0)
+        right_node = Tree_Node(None, None, None)
+        if len(right) == 1:
+            right_node.value = right[0]
+        else:
+            right_node.value = '{} AS {}'.format(right[0], right[1])
+        node.right = right_node
         node.left = build_cross_tree(cross_prods)
         node.value = 'X'
         return node
@@ -742,12 +782,13 @@ def main():
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    print_rel_alg(interpreter)
-    tree = build_query_tree(interpreter)
-    print('######################################')
-    print('#            Query Tree              #')
-    print('######################################\n')
-    print_query_tree(tree, 0)
+    import ipdb; ipdb.set_trace()
+    # print_rel_alg(interpreter)
+    # tree = build_query_tree(interpreter)
+    # print('######################################')
+    # print('#            Query Tree              #')
+    # print('######################################\n')
+    # print_query_tree(tree, 0)
 
 
 if __name__ == '__main__':
