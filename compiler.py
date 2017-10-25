@@ -326,6 +326,26 @@ class NoOp(AST):
     pass
 
 
+class Query(AST):
+    def __init__(self, projects, relations, selects=None, groupby=None, having=None):
+        self.selects = selects
+        self.projects = projects
+        self.relations = relations
+        self.groupby = groupby
+        self.having = having
+
+class Nest_Query(AST):
+    def __init__(self, attribute, op, query):
+        self.attribute = attribute
+        self.op = op
+        self.query = query
+
+class Set_Op(AST):
+    def __init__(self, left=None, right=None, op=None):
+        self.left = left
+        self.right = right
+        self.op = op
+
 class In(AST):
     def __init__(self, attribute, select):
         pass
@@ -366,10 +386,11 @@ class Parser(object):
                                 (HAVING condition_list)?
                                 (INTERSECT | UNION | EXCEPT sql_compound_statement)?
         """
-        cond_nodes = None
-        group_by_list = None
-        having_list = None
+        cond_nodes = list()
+        group_by_list = list()
+        having_list = list()
         compound_statement = None
+        set_op = ''
         self.eat(SELECT)
         attr_nodes = self.attribute_list()
         self.eat(FROM)
@@ -384,6 +405,7 @@ class Parser(object):
             self.eat(HAVING)
             having_list = self.condition_list()
         if self.current_token.type in (INTERSECT, UNION, EXCEPT):
+            set_op = self.current_token.type
             if self.current_token.type == INTERSECT:
                 self.eat(INTERSECT)
             elif self.current_token.type == UNION:
@@ -391,27 +413,12 @@ class Parser(object):
             elif self.current_token.type == EXCEPT:
                 self.eat(EXCEPT)
             compound_statement = self.sql_compound_statement()
-        roots = list()
-        root = Compound()
-        for node in attr_nodes:
-            root.children.append(node)
-        for node in rel_nodes:
-            root.children.append(node)
-        if cond_nodes:
-            for node in cond_nodes:
-                root.children.append(node)
-        if group_by_list:
-            for node in group_by_list:
-                root.children.append(node)
-        if having_list:
-            for node in having_list:
-                root.children.append(node)
+
+        query = Query(attr_nodes, rel_nodes, cond_nodes, group_by_list, having_list)
         if compound_statement:
-            compound_statement.append(root)
-            return compound_statement
+            return Set_Op(query, compound_statement, set_op)
         else:
-            roots.append(root)
-            return roots
+            return query
 
     def attribute_list(self):
         """
@@ -521,10 +528,9 @@ class Parser(object):
             self.eat(IN)
             self.eat(LPAREN)
             node = self.sql_compound_statement()
-            right = node[0].children.pop(0) # only 1 attribute on IN
             self.eat(RPAREN)
-            node[0].children.append(Rel_Alg_Select(left, Token(EQUAL, '='), right))
-            return node
+            sub_query = Nest_Query(left, IN, node)
+            return sub_query
 
     def parse_sql(self):
         """
@@ -534,7 +540,7 @@ class Parser(object):
         node = self.query()
         if self.current_token.type != EOF:
             self.error()
-
+        self.eat(EOF)
         return node
 
 
@@ -557,12 +563,44 @@ class NodeVisitor(object):
 class Interpreter(NodeVisitor):
 
     GLOBAL_SCOPE = {}
-    SELECTS = list()
-    PROJECTS = list()
-    CROSS_PRODUCTS = list()
+    QUERIES = list()
+    SET_OPS = list()
 
     def __init__(self, parser):
         self.parser = parser
+
+    def visit_Set_Op(self, set_op):
+        pass
+
+    def visit_Nest_Query(self, nest_query):
+        # import ipdb; ipdb.set_trace()
+        left = nest_query.attribute
+        op = Token(EQUAL, '=')
+        right = nest_query.query.projects.pop(0) #Only one ever
+        condition = Rel_Alg_Select(left, op, right)
+        nest_query.query.selects.append(condition)
+        return self.visit(nest_query.query)
+
+    def visit_Query(self, query):
+        selects = list()
+        projects = list()
+        relations = list()
+        for item in query.projects:
+            projects.append(self.visit(item))
+        for item in query.relations:
+            relations.append(self.visit(item))
+        for item in query.selects:
+            if isinstance(item, Nest_Query):
+                nested_query = self.visit(item)
+                for itemx in nested_query.relations:
+                    relations.append(itemx)
+                for itemx in nested_query.selects:
+                    selects.append(itemx)
+            else:
+                selects.append(self.visit(item))
+
+        return Query(projects, relations, selects)
+
 
     def visit_Rel_Alg_Select(self, node):
         if node.left.relation: # always attribute
@@ -578,61 +616,33 @@ class Interpreter(NodeVisitor):
         else:
             right = str(node.right.value)
         result = left +' '+ node.op.value +' '+ right
-        self.SELECTS.append(result)
+        return result
 
     def visit_list(self, node):
         for item in node:
             self.visit(item)
 
-    def visit_BinOp(self, node):
-        if node.op.type == PLUS:
-            return self.visit(node.left) + self.visit(node.right)
-        elif node.op.type == MINUS:
-            return self.visit(node.left) - self.visit(node.right)
-        elif node.op.type == MUL:
-            return self.visit(node.left) * self.visit(node.right)
-        elif node.op.type == DIV:
-            return self.visit(node.left) / self.visit(node.right)
-
     def visit_Num(self, node):
         return node.value
 
-    def visit_UnaryOp(self, node):
-        op = node.op.type
-        if op == PLUS:
-            return +self.visit(node.expr)
-        elif op == MINUS:
-            return -self.visit(node.expr)
 
     def visit_Compound(self, node):
         for child in node.children:
             self.visit(child)
-
-    def visit_Assign(self, node):
-        var_name = node.left.value
-        self.GLOBAL_SCOPE[var_name] = self.visit(node.right)
-
-    def visit_Var(self, node):
-        var_name = node.value
-        val = self.GLOBAL_SCOPE.get(var_name)
-        if val is None:
-            raise NameError(repr(var_name))
-        else:
-            return val
 
     def visit_Attr(self, node):
         atr_name = node.attribute
         if node.relation:
             rel_name = node.relation
             atr_name = rel_name + '.' + atr_name
-        self.PROJECTS.append(atr_name)
+        return atr_name
 
     def visit_Rel(self, node):
         rel_name = list()
         rel_name.append(node.relation)
         if node.alias:
             rel_name.append(node.alias)
-        self.CROSS_PRODUCTS.append(rel_name)
+        return rel_name
 
     def visit_NoOp(self, node):
         pass
@@ -742,12 +752,15 @@ def main():
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    print_rel_alg(interpreter)
-    tree = build_query_tree(interpreter)
-    print('######################################')
-    print('#            Query Tree              #')
-    print('######################################\n')
-    print_query_tree(tree, 0)
+    print(result.projects)
+    print(result.selects)
+    print(result.relations)
+    # print_rel_alg(interpreter)
+    # tree = build_query_tree(interpreter)
+    # print('######################################')
+    # print('#            Query Tree              #')
+    # print('######################################\n')
+    # print_query_tree(tree, 0)
 
 
 if __name__ == '__main__':
