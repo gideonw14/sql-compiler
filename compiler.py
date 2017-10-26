@@ -1,4 +1,3 @@
-""" SPI - Simple Pascal Interpreter. Part 9."""
 
 ###############################################################################
 #                                                                             #
@@ -52,12 +51,15 @@ def flatten(S):
         return flatten(S[0]) + flatten(S[1:])
     return S[:1] + flatten(S[1:])
 
+# structure of tree node class set up here, used later on in 
+# Interpreter section
 class Tree_Node(object):
     def __init__(self, left, right, value):
         self.left = left
         self.right = right
         self.value = value
 
+# structure of token established here, used throughout program
 class Token(object):
     def __init__(self, type, value):
         self.type = type
@@ -79,7 +81,7 @@ class Token(object):
     def __repr__(self):
         return self.__str__()
 
-
+# list of reserved keyword tokens
 RESERVED_KEYWORDS = {
     'BEGIN': Token('BEGIN', 'BEGIN'),
     'END': Token('END', 'END'),
@@ -98,7 +100,7 @@ RESERVED_KEYWORDS = {
 
 }
 
-
+# first major component of this program, breaks everything into tokens
 class Lexer(object):
     def __init__(self, text):
         # client string input, e.g. "4 + 2 * 3 - 6 / 2"
@@ -107,6 +109,7 @@ class Lexer(object):
         self.pos = 0
         self.current_char = self.text[self.pos]
 
+    # raises exception if a character cannot be converted to token
     def error(self):
         raise Exception('Invalid character near or at "{}"'.format(self.current_char))
 
@@ -118,6 +121,7 @@ class Lexer(object):
         else:
             self.current_char = self.text[self.pos]
 
+    # looks at the next character without incrementing pos
     def peek(self):
         peek_pos = self.pos + 1
         if peek_pos > len(self.text) - 1:
@@ -257,23 +261,25 @@ class Lexer(object):
 #                                                                             #
 ###############################################################################
 
+# abstract-syntax tree base class, not much here but added onto by more
+# specific AST nodes that inherit from this
 class AST(object):
     pass
 
-
+# binary opreator 
 class BinOp(AST):
     def __init__(self, left, op, right):
         self.left = left
         self.token = self.op = op
         self.right = right
 
-
+# number (integer)
 class Num(AST):
     def __init__(self, token):
         self.token = token
         self.value = token.value
 
-
+# unary operation
 class UnaryOp(AST):
     def __init__(self, op, expr):
         self.token = self.op = op
@@ -285,7 +291,7 @@ class Compound(AST):
     def __init__(self):
         self.children = []
 
-
+# assignment statement
 class Assign(AST):
     def __init__(self, left, op, right):
         self.left = left
@@ -299,12 +305,14 @@ class Var(AST):
         self.token = token
         self.value = token.value
 
+# relational algebra select operation
 class Rel_Alg_Select(AST):
     def __init__(self, left, op, right):
         self.left = left
         self.token = self.op = op
         self.right = right
 
+# attributes
 class Attr(AST):
     def __init__(self, attribute, relation=None):
         self.attribute = attribute.value
@@ -313,6 +321,7 @@ class Attr(AST):
         else:
             self.relation = None
 
+# realtions
 class Rel(AST):
     def __init__(self, relation, alias=None):
         self.relation = relation.value
@@ -322,14 +331,16 @@ class Rel(AST):
             self.alias = None
 
 
+# if there is no operation in tree, just passes over
 class NoOp(AST):
     pass
 
-
+# IN operation
 class In(AST):
     def __init__(self, attribute, select):
         pass
 
+# main Parser class
 class Parser(object):
     def __init__(self, lexer):
         self.lexer = lexer
@@ -544,6 +555,7 @@ class Parser(object):
 #                                                                             #
 ###############################################################################
 
+# base Node visitor class, other more specific visits use these methods
 class NodeVisitor(object):
     def visit(self, node):
         method_name = 'visit_' + type(node).__name__
@@ -553,9 +565,11 @@ class NodeVisitor(object):
     def generic_visit(self, node):
         raise Exception('No visit_{} method'.format(type(node).__name__))
 
-
+# main interpreter class
 class Interpreter(NodeVisitor):
 
+    # declares lists for selects, projects, and cross products. 
+    # lists used to generate relational algebra and query trees
     GLOBAL_SCOPE = {}
     SELECTS = list()
     PROJECTS = list()
@@ -637,13 +651,14 @@ class Interpreter(NodeVisitor):
     def visit_NoOp(self, node):
         pass
 
-
+    # function that calls the first visit and starts the interpretation
     def interpret(self):
         tree = self.parser.parse_sql()
         if tree is None:
             return ''
         return self.visit(tree)
 
+# prints the relational algebra using the lists
 def print_rel_alg(interpreter):
     print('######################################')
     print('#          Relation Algebra          #')
@@ -674,6 +689,7 @@ def print_rel_alg(interpreter):
                 print('{} AS {} X '.format(list[0], list[1]), end='')
     print(')))\n')
 
+# builds the query tree using lists generated from visits
 def build_query_tree(interpreter):
     project = 'PROJECT ['
     for idx, item in enumerate(interpreter.PROJECTS):
@@ -696,6 +712,7 @@ def build_query_tree(interpreter):
     tree.left.left = cross_node
     return tree
 
+# separate frunction for building the cross product trees
 def build_cross_tree(cross_prods):
     node = Tree_Node(None, None, None)
     if len(cross_prods) == 1:
@@ -712,6 +729,7 @@ def build_cross_tree(cross_prods):
         node.value = 'X'
         return node
 
+# function to actually print/format the query tree
 def print_query_tree(tree, spaces):
     if tree:
         spaces += SPACES
@@ -733,13 +751,19 @@ def print_query_tree(tree, spaces):
     return
 
 def main():
+
+    # brings in the SQL query and the tables that represent the relation
     import sys
     text = open(sys.argv[1], 'r').read()
     tables = open(sys.argv[2], 'r').read()
 
     text = text.upper()
+    # lexer called first to break into tokens
     lexer = Lexer(text)
+    # parser called to generate tree for interpreter
     parser = Parser(lexer)
+    # interpreter visits nodes on tree and generates relational algebra
+    # and trees from it
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
     print_rel_alg(interpreter)
