@@ -1,3 +1,7 @@
+# Group: Gideon Walker and Ryan Leas
+# Project: SQL Compiler Part 1
+# Date: 10/26/17
+# Class: CS 5300 Databases
 
 ###############################################################################
 #                                                                             #
