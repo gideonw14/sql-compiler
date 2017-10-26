@@ -826,48 +826,51 @@ def main():
 
     # brings in the SQL query and the tables that represent the relation
     import sys
-    text = open(sys.argv[1], 'r').read()
-    tables = open(sys.argv[2], 'r').read()
+    test_files = 13
+    for i in range(1, test_files):
+        print('\nTest Case #1\n')
+        text = open('test{}.txt'.format(i), 'r').read()
+        # tables = open(sys.argv[2], 'r').read()
 
-    text = text.upper()
-    # lexer called first to break into tokens
-    lexer = Lexer(text)
-    # parser called to generate tree for interpreter
-    parser = Parser(lexer)
-    # interpreter visits nodes on tree and generates relational algebra
-    # and trees from it
-    interpreter = Interpreter(parser)
-    result = interpreter.interpret()
-    if isinstance(result, Query):
-        print(result.projects)
-        print(result.selects)
-        print(result.relations)
-    elif isinstance(result, Set_Op):
-        print(result.left.projects)
-        print(result.left.selects)
-        print(result.left.relations)
-        print(result.op)
-        print(result.right.projects)
-        print(result.right.selects)
-        print(result.right.relations)
-    print('######################################')
-    print('#          Relation Algebra          #')
-    print('######################################\n')
-    if isinstance(result, Query):
-        print_rel_alg(result, end='\n')
-    elif isinstance(result, Set_Op):
-        print_rel_alg(result.left)
-        print(' {} '.format(result.op), end='')
-        print_rel_alg(result.right, end='\n')
-    print('######################################')
-    print('#            Query Tree              #')
-    print('######################################\n')
-    tree = None
-    if isinstance(result, Query):
-        tree = build_query_tree(result)
-    elif isinstance(result, Set_Op):
-        tree = build_set_op_tree(result)
-    print_query_tree(tree, 0)
+        text = text.upper()
+        # lexer called first to break into tokens
+        lexer = Lexer(text)
+        # parser called to generate tree for interpreter
+        parser = Parser(lexer)
+        # interpreter visits nodes on tree and generates relational algebra
+        # and trees from it
+        interpreter = Interpreter(parser)
+        result = interpreter.interpret()
+        if isinstance(result, Query):
+            print(result.projects)
+            print(result.selects)
+            print(result.relations)
+        elif isinstance(result, Set_Op):
+            print(result.left.projects)
+            print(result.left.selects)
+            print(result.left.relations)
+            print(result.op)
+            print(result.right.projects)
+            print(result.right.selects)
+            print(result.right.relations)
+        print('######################################')
+        print('#          Relation Algebra          #')
+        print('######################################\n')
+        if isinstance(result, Query):
+            print_rel_alg(result, end='\n')
+        elif isinstance(result, Set_Op):
+            print_rel_alg(result.left)
+            print(' {} '.format(result.op), end='')
+            print_rel_alg(result.right, end='\n')
+        print('######################################')
+        print('#            Query Tree              #')
+        print('######################################\n')
+        tree = None
+        if isinstance(result, Query):
+            tree = build_query_tree(result)
+        elif isinstance(result, Set_Op):
+            tree = build_set_op_tree(result)
+        print_query_tree(tree, 0)
 
 
 if __name__ == '__main__':
