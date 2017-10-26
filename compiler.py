@@ -29,6 +29,7 @@ FROM            = 'FROM'
 WHERE           = 'WHERE'
 AS              = 'AS'
 IN              = 'IN'
+CONTAINS        = 'CONTAINS'
 INTERSECT       = 'INTERSECT'
 UNION           = 'UNION'
 EXCEPT          = 'EXCEPT'
@@ -41,6 +42,11 @@ GREATER         = 'GREATER'
 LESSER          = 'LESSER'
 GREATEREQUAL    = 'GREATEREQUAL'
 LESSEREQUAL     = 'LESSEREQUAL'
+MIN             = 'MIN'
+MAX             = 'MAX'
+SUM             = 'SUM'
+COUNT           = 'COUNT'
+AVG             = 'AVG'
 
 SPACES = 8
 # Helper Function
@@ -92,11 +98,17 @@ RESERVED_KEYWORDS = {
     'AND': Token('AND', 'AND'),
     'OR': Token('OR', 'OR'),
     'IN': Token('IN', 'IN'),
+    'CONTAINS': Token('CONTAINS', 'CONTAINS'),
     'INTERSECT': Token('INTERSECT', 'INTERSECT'),
     'UNION': Token('UNION', 'UNION'),
     'EXCEPT': Token('EXCEPT', 'EXCEPT'),
     'HAVING': Token('HAVING', 'HAVING'),
     'GROUPBY': Token('GROUPBY', 'GROUPBY'),
+    'MIN': Token('MIN', 'MIN'),
+    'MAX': Token('MAX', 'MAX'),
+    'COUNT': Token('COUNT', 'COUNT'),
+    'SUM': Token('SUM', 'SUM'),
+    'AVG': Token('AVG', 'AVG'),
 
 }
 
@@ -187,30 +199,13 @@ class Lexer(object):
             if self.current_char == "'":
                 return Token(STRING, self.string())
 
-            if self.current_char == ':' and self.peek() == '=':
-                self.advance()
-                self.advance()
-                return Token(ASSIGN, ':=')
-
             if self.current_char == ';':
                 self.advance()
                 return Token(SEMI, ';')
 
-            if self.current_char == '+':
-                self.advance()
-                return Token(PLUS, '+')
-
-            if self.current_char == '-':
-                self.advance()
-                return Token(MINUS, '-')
-
             if self.current_char == '*':
                 self.advance()
                 return Token(MUL, '*')
-
-            if self.current_char == '/':
-                self.advance()
-                return Token(DIV, '/')
 
             if self.current_char == '(':
                 self.advance()
@@ -321,6 +316,12 @@ class Attr(AST):
         else:
             self.relation = None
 
+class Ag_Function(AST):
+    def __init__(self, function, attribute, alias=None):
+        self.function = function
+        self.attribute = attribute
+        self.alias = alias
+
 # realtions
 class Rel(AST):
     def __init__(self, relation, alias=None):
@@ -335,10 +336,26 @@ class Rel(AST):
 class NoOp(AST):
     pass
 
-# IN operation
-class In(AST):
-    def __init__(self, attribute, select):
-        pass
+class Query(AST):
+    def __init__(self, projects, relations, selects=None, groupby=None, having=None, nested=None):
+        self.selects = selects
+        self.projects = projects
+        self.relations = relations
+        self.groupby = groupby
+        self.having = having
+        self.nested = nested
+
+class Nest_Query(AST):
+    def __init__(self, attribute, op, query):
+        self.attribute = attribute
+        self.op = op
+        self.query = query
+
+class Set_Op(AST):
+    def __init__(self, left=None, right=None, op=None):
+        self.left = left
+        self.right = right
+        self.op = op
 
 # main Parser class
 class Parser(object):
@@ -362,8 +379,13 @@ class Parser(object):
             self.error()
 
     def query(self):
-        # query: compound statement;
+        # query: compound statement
+        #      | (? compound statement )?
+        if self.current_token.type == LPAREN:
+            self.eat(LPAREN)
         node = self.sql_compound_statement()
+        if self.current_token.type == RPAREN:
+            self.eat(RPAREN)
         # self.eat(SEMI)
         return node
 
@@ -375,12 +397,13 @@ class Parser(object):
                                 (WHERE condition_list)?
                                 (GROUP BY attribute_list)?
                                 (HAVING condition_list)?
-                                (INTERSECT | UNION | EXCEPT sql_compound_statement)?
+                                (INTERSECT | UNION | EXCEPT | CONTAINS sql_compound_statement)?
         """
-        cond_nodes = None
-        group_by_list = None
-        having_list = None
+        cond_nodes = list()
+        group_by_list = list()
+        having_list = list()
         compound_statement = None
+        set_op = ''
         self.eat(SELECT)
         attr_nodes = self.attribute_list()
         self.eat(FROM)
@@ -394,47 +417,69 @@ class Parser(object):
         if self.current_token.type == HAVING:
             self.eat(HAVING)
             having_list = self.condition_list()
-        if self.current_token.type in (INTERSECT, UNION, EXCEPT):
+        if self.current_token.type in (INTERSECT, UNION, EXCEPT, CONTAINS):
+            set_op = self.current_token.type
             if self.current_token.type == INTERSECT:
                 self.eat(INTERSECT)
             elif self.current_token.type == UNION:
                 self.eat(UNION)
             elif self.current_token.type == EXCEPT:
                 self.eat(EXCEPT)
-            compound_statement = self.sql_compound_statement()
-        roots = list()
-        root = Compound()
-        for node in attr_nodes:
-            root.children.append(node)
-        for node in rel_nodes:
-            root.children.append(node)
-        if cond_nodes:
-            for node in cond_nodes:
-                root.children.append(node)
-        if group_by_list:
-            for node in group_by_list:
-                root.children.append(node)
-        if having_list:
-            for node in having_list:
-                root.children.append(node)
+            elif self.current_token.type == CONTAINS:
+                self.eat(CONTAINS)
+            compound_statement = self.query()
+
+        query = Query(attr_nodes, rel_nodes, cond_nodes, group_by_list, having_list)
         if compound_statement:
-            compound_statement.append(root)
-            return compound_statement
+            return Set_Op(query, compound_statement, set_op)
         else:
-            roots.append(root)
-            return roots
+            return query
 
     def attribute_list(self):
         """
-        attribute_list : attribute
-                       | attribute COMMA attribute_list
+        attribute_list : (attribute | ag_function) (COMMA attribute_list)*
         """
-        node = self.attribute()
+        if self.current_token.type == ID:
+            node = self.attribute()
+        else:
+            node = self.ag_function()
         results = [node]
         while self.current_token.type == COMMA:
             self.eat(COMMA)
-            results.append(self.attribute())
+            if self.current_token.type == ID:
+                next = self.attribute()
+            else:
+                next = self.ag_function()
+            results.append(next)
         return results
+
+    def ag_function(self):
+        """ag_function: (MIN | MAX | SUM | COUNT | AVG) (attribute) (AS alias):"""
+        function = self.current_token.value
+        if self.current_token.type == MAX:
+            self.eat(MAX)
+        elif self.current_token.type == MIN:
+            self.eat(MIN)
+        elif self.current_token.type == SUM:
+            self.eat(SUM)
+        elif self.current_token.type == COUNT:
+            self.eat(COUNT)
+        elif self.current_token.type == AVG:
+            self.eat(AVG)
+        else:
+            self.error()
+
+        self.eat(LPAREN)
+        attribute = self.attribute()
+        self.eat(RPAREN)
+
+        if self.current_token.type == AS:
+            self.eat(AS)
+            alias = self.current_token.value
+            self.eat(ID)
+            return Ag_Function(function, attribute, alias)
+
+        return Ag_Function(function, attribute)
 
     def attribute(self):
         """
@@ -502,7 +547,7 @@ class Parser(object):
         """
         # Left is always attribute
         left = self.attribute()
-        if self.current_token.type in (EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
+        if self.current_token.type in (IN,EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
             # Comparison
             token = self.current_token
             if self.current_token.type == EQUAL:
@@ -515,8 +560,8 @@ class Parser(object):
                 self.eat(GREATEREQUAL)
             elif self.current_token.type == LESSEREQUAL:
                 self.eat(LESSEREQUAL)
-            else: # This *should* never happen
-                self.error()
+            elif self.current_token.type == IN:
+                self.eat(IN)
 
             # Right: integer, string, or attribute
             if self.current_token.type == INTEGER:
@@ -525,27 +570,29 @@ class Parser(object):
             elif self.current_token.type == STRING:
                 right = self.current_token
                 self.eat(STRING)
+            elif self.current_token.type == LPAREN:
+                self.eat(LPAREN)
+                node = self.query()
+                if self.current_token.type == RPAREN:
+                    self.eat(RPAREN)
+                sub_query = Nest_Query(left, token.value, node)
+                return sub_query
             else: # attribute
                 right = self.attribute()
             return Rel_Alg_Select(left, token, right)
-        elif self.current_token.type == IN:
-            self.eat(IN)
-            self.eat(LPAREN)
-            node = self.sql_compound_statement()
-            right = node[0].children.pop(0) # only 1 attribute on IN
-            self.eat(RPAREN)
-            node[0].children.append(Rel_Alg_Select(left, Token(EQUAL, '='), right))
-            return node
+
+
 
     def parse_sql(self):
         """
         query: sql_compound_statement
         sql_compound_statement: SELECT attributes FROM (relations | query) WHERE (conditions | attributes IN query)
         """
+        # import ipdb; ipdb.set_trace()
         node = self.query()
         if self.current_token.type != EOF:
             self.error()
-
+        self.eat(EOF)
         return node
 
 
@@ -571,12 +618,52 @@ class Interpreter(NodeVisitor):
     # declares lists for selects, projects, and cross products. 
     # lists used to generate relational algebra and query trees
     GLOBAL_SCOPE = {}
-    SELECTS = list()
-    PROJECTS = list()
-    CROSS_PRODUCTS = list()
+    QUERIES = list()
+    SET_OPS = list()
 
     def __init__(self, parser):
         self.parser = parser
+
+    def visit_Set_Op(self, set_op):
+        left = self.visit(set_op.left)
+        op = set_op.op
+        right = self.visit(set_op.right)
+        return Set_Op(left, right, op)
+
+    def visit_Nest_Query(self, nest_query):
+        # import ipdb; ipdb.set_trace()
+        left = nest_query.attribute
+        op = Token(EQUAL, '=')
+        if isinstance(nest_query.query, Query):
+            right = nest_query.query.projects.pop(0) #Only one ever
+            condition = Rel_Alg_Select(left, op, right)
+            nest_query.query.selects.append(condition)
+        return self.visit(nest_query.query)
+
+    def visit_Query(self, query):
+        selects = list()
+        projects = list()
+        relations = list()
+        for item in query.projects:
+            projects.append(self.visit(item))
+        for item in query.relations:
+            relations.append(self.visit(item))
+        new_query = Query(projects, relations)
+        for item in query.selects:
+            if isinstance(item, Nest_Query):
+                nested_query = self.visit(item)
+                if isinstance(nested_query, Query):
+                    for itemx in nested_query.relations:
+                        relations.append(itemx)
+                    for itemx in nested_query.selects:
+                        selects.append(itemx)
+                else:
+                    new_query.nested = nested_query
+            else:
+                selects.append(self.visit(item))
+        new_query.selects = selects
+        return new_query
+
 
     def visit_Rel_Alg_Select(self, node):
         if node.left.relation: # always attribute
@@ -592,61 +679,41 @@ class Interpreter(NodeVisitor):
         else:
             right = str(node.right.value)
         result = left +' '+ node.op.value +' '+ right
-        self.SELECTS.append(result)
+        return result
 
     def visit_list(self, node):
         for item in node:
             self.visit(item)
 
-    def visit_BinOp(self, node):
-        if node.op.type == PLUS:
-            return self.visit(node.left) + self.visit(node.right)
-        elif node.op.type == MINUS:
-            return self.visit(node.left) - self.visit(node.right)
-        elif node.op.type == MUL:
-            return self.visit(node.left) * self.visit(node.right)
-        elif node.op.type == DIV:
-            return self.visit(node.left) / self.visit(node.right)
-
     def visit_Num(self, node):
         return node.value
 
-    def visit_UnaryOp(self, node):
-        op = node.op.type
-        if op == PLUS:
-            return +self.visit(node.expr)
-        elif op == MINUS:
-            return -self.visit(node.expr)
 
     def visit_Compound(self, node):
         for child in node.children:
             self.visit(child)
-
-    def visit_Assign(self, node):
-        var_name = node.left.value
-        self.GLOBAL_SCOPE[var_name] = self.visit(node.right)
-
-    def visit_Var(self, node):
-        var_name = node.value
-        val = self.GLOBAL_SCOPE.get(var_name)
-        if val is None:
-            raise NameError(repr(var_name))
-        else:
-            return val
 
     def visit_Attr(self, node):
         atr_name = node.attribute
         if node.relation:
             rel_name = node.relation
             atr_name = rel_name + '.' + atr_name
-        self.PROJECTS.append(atr_name)
+        return atr_name
+
+    def visit_Ag_Function(self, node):
+        ag_function = node.function
+        attribute = self.visit(node.attribute)
+        ag_function += '(' + attribute + ')'
+        if node.alias:
+            ag_function += ' AS ' + node.alias
+        return ag_function
 
     def visit_Rel(self, node):
         rel_name = list()
         rel_name.append(node.relation)
         if node.alias:
             rel_name.append(node.alias)
-        self.CROSS_PRODUCTS.append(rel_name)
+        return rel_name
 
     def visit_NoOp(self, node):
         pass
@@ -659,25 +726,23 @@ class Interpreter(NodeVisitor):
         return self.visit(tree)
 
 # prints the relational algebra using the lists
-def print_rel_alg(interpreter):
-    print('######################################')
-    print('#          Relation Algebra          #')
-    print('######################################\n')
+def print_rel_alg(interpreter, end=''):
+
     print('PROJECT [', end='')
-    for idx, item in enumerate(interpreter.PROJECTS):
-        if idx == len(interpreter.PROJECTS) - 1:
+    for idx, item in enumerate(interpreter.projects):
+        if idx == len(interpreter.projects) - 1:
             print(item, end='')
         else:
             print('{}, '.format(item), end='')
     print('] (SELECT [', end='')
-    for idx, item in enumerate(interpreter.SELECTS):
-        if idx == len(interpreter.SELECTS) - 1:
+    for idx, item in enumerate(interpreter.selects):
+        if idx == len(interpreter.selects) - 1:
             print(item, end='')
         else:
-            print('{}, '.format(item), end='')
+            print('{} AND '.format(item), end='')
     print('] (', end='')
-    for idx, list in enumerate(interpreter.CROSS_PRODUCTS):
-        if idx == len(interpreter.CROSS_PRODUCTS) - 1:
+    for idx, list in enumerate(interpreter.relations):
+        if idx == len(interpreter.relations) - 1:
             if len(list) == 1:
                 print(list[0], end='')
             else:
@@ -687,28 +752,31 @@ def print_rel_alg(interpreter):
                 print('{} X '.format(list[0]), end='')
             else:
                 print('{} AS {} X '.format(list[0], list[1]), end='')
-    print(')))\n')
+    print(')))', end=end)
+
+def build_set_op_tree(set_op):
+    return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
 
 # builds the query tree using lists generated from visits
 def build_query_tree(interpreter):
     project = 'PROJECT ['
-    for idx, item in enumerate(interpreter.PROJECTS):
-        if idx == len(interpreter.PROJECTS) - 1:
+    for idx, item in enumerate(interpreter.projects):
+        if idx == len(interpreter.projects) - 1:
             project += item
         else:
             project += '{}, '.format(item)
     project += ']'
     tree = Tree_Node(None, None, project)
     select = 'SELECT ['
-    for idx, item in enumerate(interpreter.SELECTS):
-        if idx == len(interpreter.SELECTS) - 1:
+    for idx, item in enumerate(interpreter.selects):
+        if idx == len(interpreter.selects) - 1:
             select += item
         else:
-            select += '{}, '.format(item)
+            select += '{} AND '.format(item)
     select += ']'
     select_node = Tree_Node(None, None, select)
     tree.left = select_node
-    cross_node = build_cross_tree(interpreter.CROSS_PRODUCTS)
+    cross_node = build_cross_tree(interpreter.relations)
     tree.left.left = cross_node
     return tree
 
@@ -766,11 +834,35 @@ def main():
     # and trees from it
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    print_rel_alg(interpreter)
-    tree = build_query_tree(interpreter)
+    if isinstance(result, Query):
+        print(result.projects)
+        print(result.selects)
+        print(result.relations)
+    elif isinstance(result, Set_Op):
+        print(result.left.projects)
+        print(result.left.selects)
+        print(result.left.relations)
+        print(result.op)
+        print(result.right.projects)
+        print(result.right.selects)
+        print(result.right.relations)
+    print('######################################')
+    print('#          Relation Algebra          #')
+    print('######################################\n')
+    if isinstance(result, Query):
+        print_rel_alg(result, end='\n')
+    elif isinstance(result, Set_Op):
+        print_rel_alg(result.left)
+        print(' {} '.format(result.op), end='')
+        print_rel_alg(result.right, end='\n')
     print('######################################')
     print('#            Query Tree              #')
     print('######################################\n')
+    tree = None
+    if isinstance(result, Query):
+        tree = build_query_tree(result)
+    elif isinstance(result, Set_Op):
+        tree = build_set_op_tree(result)
     print_query_tree(tree, 0)
 
 

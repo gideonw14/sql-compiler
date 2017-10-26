@@ -1,5 +1,5 @@
 SELECT S.sname
 FROM Sailors AS S
 WHERE S.age > (SELECT MAX (S2.age)
- FROM Sailors S2
- WHERE R.sid = S2.rating = 10)
+ FROM Sailors AS S2
+ WHERE R.sid = 1 and S2.rating = 10)
