@@ -10,6 +10,7 @@
 #
 # EOF (end-of-file) token is used to indicate that
 # there is no more input left for lexical analysis
+
 INTEGER         = 'INTEGER'
 STRING          = 'STRING'
 PLUS            = 'PLUS'
@@ -295,10 +296,26 @@ class Var(AST):
         self.value = token.value
 
 class Rel_Alg_Select(AST):
-    def __init__(self, left, op, right):
+    def __init__(self, left, op, right, next=None):
         self.left = left
         self.token = self.op = op
         self.right = right
+        self.next = next
+
+    def __eq__(self, other):
+        if isinstance(other, Rel_Alg_Select):
+            if self.__str__() == other.__str__():
+                return True
+        return False
+
+    def __str__(self):
+        result = '{} {} {}'.format(self.left.__str__(), self.op, self.right.__str__())
+        if self.next:
+            result += ' {}'.format(self.next)
+        return result
+
+    def __repr__(self):
+        return self.__str__()
 
 class Attr(AST):
     def __init__(self, attribute, relation=None):
@@ -307,6 +324,15 @@ class Attr(AST):
             self.relation = relation.value
         else:
             self.relation = None
+
+    def __str__(self):
+        result = self.attribute
+        if self.relation:
+            result = '{}.{}'.format(self.relation, result)
+        return result
+
+    def __repr__(self):
+        return self.__str__()
 
 class Ag_Function(AST):
     def __init__(self, function, attribute, alias=None):
@@ -425,9 +451,23 @@ class Parser(object):
 
         query = Query(attr_nodes, rel_nodes, cond_nodes, group_by_list, having_list)
         if compound_statement:
-            return Set_Op(query, compound_statement, set_op)
-        else:
-            return query
+            combined = Set_Op(query, compound_statement, set_op)
+            if combined.op == UNION:
+                query.selects[-1].next = OR
+                # import ipdb; ipdb.set_trace()
+            elif combined.op == INTERSECT or combined.op == CONTAINS:
+                query.selects[-1].next = AND
+
+            elif combined.op == EXCEPT:
+                query.selects[-1].next = 'AND NOT'
+
+            for query_condition in compound_statement.selects:
+                if query_condition in query.selects:
+                    continue
+                else:
+                    query.selects.append(query_condition)
+
+        return query
 
     def attribute_list(self):
         """
@@ -527,6 +567,7 @@ class Parser(object):
         node = self.condition()
         results = [node]
         while self.current_token.type in (AND, OR):
+            results[-1].next = self.current_token.value
             if self.current_token.type == AND:
                 self.eat(AND)
             else:
@@ -543,7 +584,7 @@ class Parser(object):
         left = self.attribute()
         if self.current_token.type in (IN,EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
             # Comparison
-            token = self.current_token
+            token = self.current_token.value
             if self.current_token.type == EQUAL:
                 self.eat(EQUAL)
             elif self.current_token.type == GREATER:
@@ -559,10 +600,10 @@ class Parser(object):
 
             # Right: integer, string, or attribute
             if self.current_token.type == INTEGER:
-                right = self.current_token
+                right = self.current_token.value
                 self.eat(INTEGER)
             elif self.current_token.type == STRING:
-                right = self.current_token
+                right = self.current_token.value
                 self.eat(STRING)
             elif self.current_token.type == LPAREN:
                 self.eat(LPAREN)
@@ -657,20 +698,22 @@ class Interpreter(NodeVisitor):
 
 
     def visit_Rel_Alg_Select(self, node):
-        if node.left.relation: # always attribute
-            left = node.left.relation + '.' + node.left.attribute
-        else:
-            left = node.left.attribute
-
-        if isinstance(node.right, Attr):
-            if node.right.relation:
-                right = node.right.relation + '.' + node.right.attribute
-            else:
-                right = node.right.attribute
-        else:
-            right = str(node.right.value)
-        result = left +' '+ node.op.value +' '+ right
-        return result
+        # if node.left.relation: # always attribute
+        #     left = node.left.relation + '.' + node.left.attribute
+        # else:
+        #     left = node.left.attribute
+        #
+        # if isinstance(node.right, Attr):
+        #     if node.right.relation:
+        #         right = node.right.relation + '.' + node.right.attribute
+        #     else:
+        #         right = node.right.attribute
+        # else:
+        #     right = str(node.right.value)
+        # result = left +' '+ node.op +' '+ right
+        # if node.next:
+        #     result += ' ' + node.next
+        return node.__str__()
 
     def visit_list(self, node):
         for item in node:
@@ -728,7 +771,7 @@ def print_rel_alg(interpreter, end=''):
         if idx == len(interpreter.selects) - 1:
             print(item, end='')
         else:
-            print('{} AND '.format(item), end='')
+            print('{} '.format(item), end='')
     print('] (', end='')
     for idx, list in enumerate(interpreter.relations):
         if idx == len(interpreter.relations) - 1:
@@ -760,7 +803,7 @@ def build_query_tree(interpreter):
         if idx == len(interpreter.selects) - 1:
             select += item
         else:
-            select += '{} AND '.format(item)
+            select += '{} '.format(item)
     select += ']'
     select_node = Tree_Node(None, None, select)
     tree.left = select_node
@@ -807,7 +850,7 @@ def print_query_tree(tree, spaces):
 def main():
     import sys
     text = open(sys.argv[1], 'r').read()
-    tables = open(sys.argv[2], 'r').read()
+    # tables = open(sys.argv[2], 'r').read()
 
     text = text.upper()
     lexer = Lexer(text)
