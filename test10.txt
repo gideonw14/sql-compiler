@@ -1,4 +1,4 @@
 SELECT B.bid, Count (*) AS reservationcount
-FROM Boats AS B, Reserves AS R
+FROM Boats B, Reserves R
 WHERE R.bid=B.bid AND B.color = 'red'
-GROUPBY B.bid
+GROUP BY B.bid

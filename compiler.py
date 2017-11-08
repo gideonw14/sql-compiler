@@ -36,7 +36,8 @@ INTERSECT       = 'INTERSECT'
 UNION           = 'UNION'
 EXCEPT          = 'EXCEPT'
 HAVING          = 'HAVING'
-GROUPBY         = 'GROUPBY'
+GROUP           = 'GROUP'
+BY              = 'BY'
 AND             = 'AND'
 OR              = 'OR'
 EQUAL           = 'EQUAL'
@@ -102,7 +103,8 @@ RESERVED_KEYWORDS = {
     'UNION': Token('UNION', 'UNION'),
     'EXCEPT': Token('EXCEPT', 'EXCEPT'),
     'HAVING': Token('HAVING', 'HAVING'),
-    'GROUPBY': Token('GROUPBY', 'GROUPBY'),
+    'GROUP': Token('GROUP', 'GROUP'),
+    'BY': Token('BY', 'BY'),
     'MIN': Token('MIN', 'MIN'),
     'MAX': Token('MAX', 'MAX'),
     'COUNT': Token('COUNT', 'COUNT'),
@@ -340,6 +342,15 @@ class Ag_Function(AST):
         self.attribute = attribute
         self.alias = alias
 
+    def __str__(self):
+        result = '{}({})'.format(self.function, self.attribute)
+        if self.alias:
+            result += ' AS {}'.format(self.alias)
+        return result
+
+    def __repr__(self):
+        return self.__str__()
+
 class Rel(AST):
     def __init__(self, relation, alias=None):
         self.relation = relation.value
@@ -393,7 +404,7 @@ class Parser(object):
         # and assign the next token to the self.current_token,
         # otherwise raise an exception.
         if self.current_token.type == token_type:
-            print(self.current_token)
+            # print(self.current_token)
             self.current_token = self.lexer.get_next_token()
         else:
             self.error()
@@ -419,6 +430,7 @@ class Parser(object):
                                 (HAVING condition_list)?
                                 (INTERSECT | UNION | EXCEPT | CONTAINS sql_compound_statement)?
         """
+        # import ipdb; ipdb.set_trace()
         cond_nodes = list()
         group_by_list = list()
         having_list = list()
@@ -431,8 +443,9 @@ class Parser(object):
         if self.current_token.type == WHERE:
             self.eat(WHERE)
             cond_nodes = self.condition_list()
-        if self.current_token.type == GROUPBY:
-            self.eat(GROUPBY)
+        if self.current_token.type == GROUP:
+            self.eat(GROUP)
+            self.eat(BY)
             group_by_list = self.attribute_list()
         if self.current_token.type == HAVING:
             self.eat(HAVING)
@@ -454,10 +467,8 @@ class Parser(object):
             combined = Set_Op(query, compound_statement, set_op)
             if combined.op == UNION:
                 query.selects[-1].next = OR
-                # import ipdb; ipdb.set_trace()
             elif combined.op == INTERSECT or combined.op == CONTAINS:
                 query.selects[-1].next = AND
-
             elif combined.op == EXCEPT:
                 query.selects[-1].next = 'AND NOT'
 
@@ -549,12 +560,13 @@ class Parser(object):
     def relation(self):
         """
         relation : identifier
-                 | identifier AS identifier
+                 | identifier (AS)? identifier
         """
         node = Rel(self.current_token)
         self.eat(ID)
         if self.current_token.type == AS:
             self.eat(AS)
+        if self.current_token.type == ID:
             node.alias = self.current_token.value
             self.eat(ID)
         return node
@@ -581,7 +593,10 @@ class Parser(object):
                   | attribute IN LPAREN sql_compound_statement RPAREN
         """
         # Left is always attribute
-        left = self.attribute()
+        if self.current_token.type in (SUM, COUNT, MAX, MIN, AVG):
+            left = self.ag_function()
+        else:
+            left = self.attribute()
         if self.current_token.type in (IN,EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
             # Comparison
             token = self.current_token.value
@@ -610,12 +625,11 @@ class Parser(object):
                 node = self.query()
                 if self.current_token.type == RPAREN:
                     self.eat(RPAREN)
-                sub_query = Nest_Query(left, token.value, node)
+                sub_query = Nest_Query(left, token, node)
                 return sub_query
             else: # attribute
                 right = self.attribute()
             return Rel_Alg_Select(left, token, right)
-
 
 
     def parse_sql(self):
@@ -665,11 +679,14 @@ class Interpreter(NodeVisitor):
     def visit_Nest_Query(self, nest_query):
         # import ipdb; ipdb.set_trace()
         left = nest_query.attribute
-        op = Token(EQUAL, '=')
+        if nest_query.op == 'IN':
+            op = '='
+        else:
+            op = nest_query.op
         if isinstance(nest_query.query, Query):
             right = nest_query.query.projects.pop(0) #Only one ever
-            condition = Rel_Alg_Select(left, op, right)
-            nest_query.query.selects.append(condition)
+            condition = Rel_Alg_Select(left, op, right, 'AND')
+            nest_query.query.selects.insert(0, condition)
         return self.visit(nest_query.query)
 
     def visit_Query(self, query):
@@ -694,6 +711,10 @@ class Interpreter(NodeVisitor):
             else:
                 selects.append(self.visit(item))
         new_query.selects = selects
+        if query.groupby:
+            new_query.groupby = query.groupby
+        if query.having:
+            new_query.having = query.having
         return new_query
 
 
@@ -760,6 +781,22 @@ class Interpreter(NodeVisitor):
         return self.visit(tree)
 
 def print_rel_alg(interpreter, end=''):
+    if interpreter.having:
+        print('HAVING [', end='')
+        for idx, item in enumerate(interpreter.having):
+            if idx == len(interpreter.having) - 1:
+                print('{}] ('.format(item), end='')
+            else:
+                print('{}, '.format(item), end='')
+
+    if interpreter.groupby:
+        print('GROUP BY [', end='')
+        for idx, item in enumerate(interpreter.groupby):
+            if idx == len(interpreter.groupby) - 1:
+                print('{}] ('.format(item), end='')
+            else:
+                print('{}, '.format(item), end='')
+
     print('PROJECT [', end='')
     for idx, item in enumerate(interpreter.projects):
         if idx == len(interpreter.projects) - 1:
@@ -784,12 +821,23 @@ def print_rel_alg(interpreter, end=''):
                 print('{} X '.format(list[0]), end='')
             else:
                 print('{} AS {} X '.format(list[0], list[1]), end='')
+
+    if interpreter.having:
+        print(')', end='')
+    if interpreter.groupby:
+        print(')', end='')
     print(')))', end=end)
 
 def build_set_op_tree(set_op):
     return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
 
 def build_query_tree(interpreter):
+    having_node = None
+    groupby_node = None
+    if interpreter.having:
+        having_node = Tree_Node(None, None, 'HAVING {}'.format(interpreter.having.__str__()))
+    if interpreter.groupby:
+        groupby_node = Tree_Node(None, None, 'GROUP BY {}'.format(interpreter.having.__str__()))
     project = 'PROJECT ['
     for idx, item in enumerate(interpreter.projects):
         if idx == len(interpreter.projects) - 1:
@@ -809,6 +857,12 @@ def build_query_tree(interpreter):
     tree.left = select_node
     cross_node = build_cross_tree(interpreter.relations)
     tree.left.left = cross_node
+    if groupby_node:
+        groupby_node.left = tree
+        if having_node:
+            having_node.left = groupby_node
+            return having_node
+        return groupby_node
     return tree
 
 def build_cross_tree(cross_prods):
@@ -861,6 +915,8 @@ def main():
         print(result.projects)
         print(result.selects)
         print(result.relations)
+        print(result.groupby)
+        print(result.having)
     elif isinstance(result, Set_Op):
         print(result.left.projects)
         print(result.left.selects)
