@@ -359,6 +359,14 @@ class Rel(AST):
         else:
             self.alias = None
 
+    def __eq__(self, other):
+        if self.relation == other.relation:
+            if not self.alias and not other.alias:
+                return True
+            if self.alias and other.alias:
+                if self.alias == other.alias:
+                    return True
+        return False
 
 class NoOp(AST):
     pass
@@ -450,6 +458,8 @@ class Parser(object):
         if self.current_token.type == HAVING:
             self.eat(HAVING)
             having_list = self.condition_list()
+        if self.current_token.type == RPAREN:
+            self.eat(RPAREN)
         if self.current_token.type in (INTERSECT, UNION, EXCEPT, CONTAINS):
             set_op = self.current_token.type
             if self.current_token.type == INTERSECT:
@@ -461,22 +471,29 @@ class Parser(object):
             elif self.current_token.type == CONTAINS:
                 self.eat(CONTAINS)
             compound_statement = self.query()
-
+        # import ipdb; ipdb.set_trace()
         query = Query(attr_nodes, rel_nodes, cond_nodes, group_by_list, having_list)
         if compound_statement:
             combined = Set_Op(query, compound_statement, set_op)
-            if combined.op == UNION:
-                query.selects[-1].next = OR
-            elif combined.op == INTERSECT or combined.op == CONTAINS:
-                query.selects[-1].next = AND
-            elif combined.op == EXCEPT:
-                query.selects[-1].next = 'AND NOT'
+            if query.selects:
+                if combined.op == UNION:
+                    query.selects[-1].next = OR
+                elif combined.op == INTERSECT or combined.op == CONTAINS:
+                    query.selects[-1].next = AND
+                elif combined.op == EXCEPT:
+                    query.selects[-1].next = 'AND NOT'
 
-            for query_condition in compound_statement.selects:
-                if query_condition in query.selects:
-                    continue
-                else:
-                    query.selects.append(query_condition)
+            if query.relations == compound_statement.relations:
+                for query_condition in compound_statement.selects:
+                    if query_condition in query.selects:
+                        continue
+                    else:
+                        query.selects.append(query_condition)
+            else:
+                for relation in compound_statement.relations:
+                    query.relations.append(relation)
+                for condition in compound_statement.selects:
+                    query.selects.append(condition)
 
         return query
 
@@ -837,7 +854,7 @@ def build_query_tree(interpreter):
     if interpreter.having:
         having_node = Tree_Node(None, None, 'HAVING {}'.format(interpreter.having.__str__()))
     if interpreter.groupby:
-        groupby_node = Tree_Node(None, None, 'GROUP BY {}'.format(interpreter.having.__str__()))
+        groupby_node = Tree_Node(None, None, 'GROUP BY {}'.format(interpreter.groupby.__str__()))
     project = 'PROJECT ['
     for idx, item in enumerate(interpreter.projects):
         if idx == len(interpreter.projects) - 1:
@@ -911,20 +928,20 @@ def main():
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    if isinstance(result, Query):
-        print(result.projects)
-        print(result.selects)
-        print(result.relations)
-        print(result.groupby)
-        print(result.having)
-    elif isinstance(result, Set_Op):
-        print(result.left.projects)
-        print(result.left.selects)
-        print(result.left.relations)
-        print(result.op)
-        print(result.right.projects)
-        print(result.right.selects)
-        print(result.right.relations)
+    # if isinstance(result, Query):
+    #     print(result.projects)
+    #     print(result.selects)
+    #     print(result.relations)
+    #     print(result.groupby)
+    #     print(result.having)
+    # elif isinstance(result, Set_Op):
+    #     print(result.left.projects)
+    #     print(result.left.selects)
+    #     print(result.left.relations)
+    #     print(result.op)
+    #     print(result.right.projects)
+    #     print(result.right.selects)
+    #     print(result.right.relations)
     print('######################################')
     print('#          Relation Algebra          #')
     print('######################################\n')
