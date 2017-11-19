@@ -1,4 +1,3 @@
-
 ###############################################################################
 #                                                                             #
 #  LEXER                                                                      #
@@ -6,9 +5,6 @@
 ###############################################################################
 
 # Token types
-#
-# EOF (end-of-file) token is used to indicate that
-# there is no more input left for lexical analysis
 
 INTEGER         = 'INTEGER'
 STRING          = 'STRING'
@@ -93,8 +89,6 @@ class Token(object):
 
 
 RESERVED_KEYWORDS = {
-    'BEGIN': Token('BEGIN', 'BEGIN'),
-    'END': Token('END', 'END'),
     'SELECT': Token('SELECT', 'SELECT'),
     'FROM': Token('FROM', 'FROM'),
     'WHERE': Token('WHERE', 'WHERE'),
@@ -161,7 +155,6 @@ class Lexer(object):
         result = ''
         if self.current_char == "'":
             self.advance()
-        # import ipdb; ipdb.set_trace()
         while self.current_char != "'":
             result += str(self.current_char)
             self.advance()
@@ -262,45 +255,6 @@ class Lexer(object):
 class AST(object):
     pass
 
-
-class BinOp(AST):
-    def __init__(self, left, op, right):
-        self.left = left
-        self.token = self.op = op
-        self.right = right
-
-
-class Num(AST):
-    def __init__(self, token):
-        self.token = token
-        self.value = token.value
-
-
-class UnaryOp(AST):
-    def __init__(self, op, expr):
-        self.token = self.op = op
-        self.expr = expr
-
-
-class Compound(AST):
-    """Represents a 'BEGIN ... END' block"""
-    def __init__(self):
-        self.children = []
-
-
-class Assign(AST):
-    def __init__(self, left, op, right):
-        self.left = left
-        self.token = self.op = op
-        self.right = right
-
-
-class Var(AST):
-    """The Var node is constructed out of ID token."""
-    def __init__(self, token):
-        self.token = token
-        self.value = token.value
-
 class Rel_Alg_Select(AST):
     def __init__(self, left, op, right, next=None):
         self.left = left
@@ -340,6 +294,7 @@ class Attr(AST):
     def __repr__(self):
         return self.__str__()
 
+
 class Ag_Function(AST):
     def __init__(self, function, attribute, alias=None):
         self.function = function
@@ -354,6 +309,7 @@ class Ag_Function(AST):
 
     def __repr__(self):
         return self.__str__()
+
 
 class Rel(AST):
     def __init__(self, relation, alias=None):
@@ -371,9 +327,6 @@ class Rel(AST):
                 if self.alias == other.alias:
                     return True
         return False
-
-class NoOp(AST):
-    pass
 
 
 class Query(AST):
@@ -397,18 +350,22 @@ class Set_Op(AST):
         self.right = right
         self.op = op
 
-class In(AST):
-    def __init__(self, attribute, select):
-        pass
+# class In(AST):
+#     def __init__(self, attribute, select):
+#         pass
 
 class Parser(object):
     def __init__(self, lexer):
         self.lexer = lexer
         # set current token to the first token taken from the input
         self.current_token = self.lexer.get_next_token()
+        # previous token used to make error message more helpful
+        self.prev_token = None
 
     def error(self):
-        raise Exception('Invalid syntax near or at "{}"'.format(self.current_token.value))
+        from colorama import init, Fore
+        init(autoreset=True)
+        raise Exception(Fore.RED + 'Invalid syntax near or at "{} {}"'.format(self.prev_token.value, self.current_token.value))
 
     def eat(self, token_type):
         # compare the current token type with the passed token
@@ -417,6 +374,7 @@ class Parser(object):
         # otherwise raise an exception.
         if self.current_token.type == token_type:
             # print(self.current_token)
+            self.prev_token = self.current_token
             self.current_token = self.lexer.get_next_token()
         else:
             self.error()
@@ -475,7 +433,6 @@ class Parser(object):
             elif self.current_token.type == CONTAINS:
                 self.eat(CONTAINS)
             compound_statement = self.query()
-        # import ipdb; ipdb.set_trace()
         query = Query(attr_nodes, rel_nodes, cond_nodes, group_by_list, having_list)
         if compound_statement:
             combined = Set_Op(query, compound_statement, set_op)
@@ -658,7 +615,6 @@ class Parser(object):
         query: sql_compound_statement
         sql_compound_statement: SELECT attributes FROM (relations | query) WHERE (conditions | attributes IN query)
         """
-        # import ipdb; ipdb.set_trace()
         node = self.query()
         self.check_syntax(node)
         if self.current_token.type != EOF:
@@ -694,7 +650,7 @@ class Parser(object):
     def check_attribute(self, attribute, _relations, _aliases):
         if attribute.relation:
             if not (attribute.relation in _relations or attribute.relation in _aliases):
-                raise Exception('Relation {} is not used in this query'.format(attribute.relation))
+                raise Exception('Relation or alias {} is not used in this query'.format(attribute.relation))
             else:
                 if attribute.relation in _aliases:
                     relation = _relations[_aliases.index(attribute.relation)]
@@ -745,7 +701,6 @@ class Interpreter(NodeVisitor):
         return Set_Op(left, right, op)
 
     def visit_Nest_Query(self, nest_query):
-        # import ipdb; ipdb.set_trace()
         left = nest_query.attribute
         if nest_query.op == 'IN':
             op = '='
@@ -787,30 +742,11 @@ class Interpreter(NodeVisitor):
 
 
     def visit_Rel_Alg_Select(self, node):
-        # if node.left.relation: # always attribute
-        #     left = node.left.relation + '.' + node.left.attribute
-        # else:
-        #     left = node.left.attribute
-        #
-        # if isinstance(node.right, Attr):
-        #     if node.right.relation:
-        #         right = node.right.relation + '.' + node.right.attribute
-        #     else:
-        #         right = node.right.attribute
-        # else:
-        #     right = str(node.right.value)
-        # result = left +' '+ node.op +' '+ right
-        # if node.next:
-        #     result += ' ' + node.next
         return node.__str__()
 
     def visit_list(self, node):
         for item in node:
             self.visit(item)
-
-    def visit_Num(self, node):
-        return node.value
-
 
     def visit_Compound(self, node):
         for child in node.children:
@@ -838,10 +774,6 @@ class Interpreter(NodeVisitor):
             rel_name.append(node.alias)
         return rel_name
 
-    def visit_NoOp(self, node):
-        pass
-
-
     def interpret(self):
         tree = self.parser.parse_sql()
         if tree is None:
@@ -849,8 +781,10 @@ class Interpreter(NodeVisitor):
         return self.visit(tree)
 
 def print_rel_alg(interpreter, end=''):
+    from colorama import init, Fore, Back, Style
+    init()
     if interpreter.having:
-        print('HAVING [', end='')
+        print(Fore.MAGENTA + 'HAVING [', end='')
         for idx, item in enumerate(interpreter.having):
             if idx == len(interpreter.having) - 1:
                 print('{}] ('.format(item), end='')
@@ -858,43 +792,50 @@ def print_rel_alg(interpreter, end=''):
                 print('{}, '.format(item), end='')
 
     if interpreter.groupby:
-        print('GROUP BY [', end='')
+        print(Fore.GREEN + 'GROUP BY [', end='')
         for idx, item in enumerate(interpreter.groupby):
             if idx == len(interpreter.groupby) - 1:
                 print('{}] ('.format(item), end='')
             else:
                 print('{}, '.format(item), end='')
+        print(Fore.RESET, end='')
 
-    print('PROJECT [', end='')
+    print(Fore.LIGHTYELLOW_EX + 'PROJECT [', end='')
     for idx, item in enumerate(interpreter.projects):
         if idx == len(interpreter.projects) - 1:
-            print(item, end='')
+            print('{}] ('.format(item), end='')
         else:
             print('{}, '.format(item), end='')
-    print('] (SELECT [', end='')
+    print(Fore.LIGHTBLUE_EX + 'SELECT [', end='')
     for idx, item in enumerate(interpreter.selects):
         if idx == len(interpreter.selects) - 1:
             print(item, end='')
         else:
             print('{} '.format(item), end='')
-    print('] (', end='')
+    print('] (' + Fore.WHITE, end='')
+
+    print(Fore.RED, end='')
     for idx, list in enumerate(interpreter.relations):
         if idx == len(interpreter.relations) - 1:
             if len(list) == 1:
                 print(list[0], end='')
             else:
                 print('{} AS {}'.format(list[0], list[1]), end='')
+            print(']'*idx, end='')
         else:
             if len(list) == 1:
-                print('{} X '.format(list[0]), end='')
+                print('{} X ['.format(list[0]), end='')
             else:
-                print('{} AS {} X '.format(list[0], list[1]), end='')
+                print('{} AS {} X ['.format(list[0], list[1]), end='')
 
+
+    print(Fore.LIGHTBLUE_EX + ')' + Fore.LIGHTYELLOW_EX + ')', end='')
     if interpreter.having:
-        print(')', end='')
+        print(Fore.GREEN + ')', end='')
     if interpreter.groupby:
-        print(')', end='')
-    print(')))', end=end)
+        print(Fore.MAGENTA + ')', end='')
+
+    print(Style.RESET_ALL + end, end='')
 
 def build_set_op_tree(set_op):
     return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
@@ -971,45 +912,21 @@ def print_query_tree(tree, spaces):
 
 def main():
     import sys
-    text = open(sys.argv[1], 'r').read()
-    # tables = open(sys.argv[2], 'r').read()
-
+    test_case = input('Test case (a-o): ')
+    text = open('part2_{}.txt'.format(test_case), 'r').read()
     text = text.upper()
     lexer = Lexer(text)
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    # if isinstance(result, Query):
-    #     print(result.projects)
-    #     print(result.selects)
-    #     print(result.relations)
-    #     print(result.groupby)
-    #     print(result.having)
-    # elif isinstance(result, Set_Op):
-    #     print(result.left.projects)
-    #     print(result.left.selects)
-    #     print(result.left.relations)
-    #     print(result.op)
-    #     print(result.right.projects)
-    #     print(result.right.selects)
-    #     print(result.right.relations)
     print('######################################')
     print('#          Relation Algebra          #')
     print('######################################\n')
-    if isinstance(result, Query):
-        print_rel_alg(result, end='\n')
-    elif isinstance(result, Set_Op):
-        print_rel_alg(result.left)
-        print(' {} '.format(result.op), end='')
-        print_rel_alg(result.right, end='\n')
+    print_rel_alg(result, end='\n\n')
     print('######################################')
     print('#            Query Tree              #')
     print('######################################\n')
-    tree = None
-    if isinstance(result, Query):
-        tree = build_query_tree(result)
-    elif isinstance(result, Set_Op):
-        tree = build_set_op_tree(result)
+    tree = build_query_tree(result)
     print_query_tree(tree, 0)
 
 

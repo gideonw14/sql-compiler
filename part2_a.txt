@@ -1,0 +1,3 @@
+SELECT S.sid, S.sname, S.rating, S.age
+FROM Sailors AS S
+WHERE S.rating > 7

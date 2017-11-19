@@ -1,0 +1,3 @@
+SELECT S.sid, S.sname
+FROM Sailors AS S
+WHERE S.color = 'green' 
