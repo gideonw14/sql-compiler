@@ -1,4 +1,3 @@
-""" SPI - Simple Pascal Interpreter. Part 9."""
 
 ###############################################################################
 #                                                                             #
@@ -52,6 +51,11 @@ COUNT           = 'COUNT'
 AVG             = 'AVG'
 
 SPACES = 8
+RELATIONS = ('SAILORS', 'BOATS', 'RESERVES')
+ATTRIBUTES = {RELATIONS[0]: ('SID', 'SNAME', 'RATING', 'AGE'),
+              RELATIONS[1]: ('BID', 'BNAME', 'COLOR'),
+              RELATIONS[2]: ('SID', 'BID', 'DAY')}
+
 # Helper Function
 def flatten(S):
     if S == []:
@@ -656,12 +660,59 @@ class Parser(object):
         """
         # import ipdb; ipdb.set_trace()
         node = self.query()
+        self.check_syntax(node)
         if self.current_token.type != EOF:
             self.error()
         self.eat(EOF)
         return node
 
+    def check_syntax(self, query):
+        _relations = list()
+        _aliases = list()
+        for relation in query.relations:
+            if not relation.relation in RELATIONS:
+                raise Exception('Relation {} not in the database.'.format(relation.relation))
+            else:
+                _relations.append(relation.relation)
+                if relation.alias:
+                    _aliases.append(relation.alias)
 
+        for attribute in query.projects:
+            if isinstance(attribute, Attr):
+                self.check_attribute(attribute, _relations, _aliases)
+            #else: Ag Function
+
+        for condition in query.selects:
+            if isinstance(condition, Nest_Query):
+                self.check_syntax(condition.query)
+            elif isinstance(condition, Rel_Alg_Select):
+                self.check_attribute(condition.left, _relations, _aliases)
+                if isinstance(condition.right, Attr):
+                    self.check_attribute(condition.right, _relations, _aliases)
+            #else its an Ag function
+
+    def check_attribute(self, attribute, _relations, _aliases):
+        if attribute.relation:
+            if not (attribute.relation in _relations or attribute.relation in _aliases):
+                raise Exception('Relation {} is not used in this query'.format(attribute.relation))
+            else:
+                if attribute.relation in _aliases:
+                    relation = _relations[_aliases.index(attribute.relation)]
+                else:
+                    relation = attribute.relation
+                attributes = ATTRIBUTES[relation]
+                if not attribute.attribute in attributes:
+                    raise Exception(
+                        'Attribute {} is not in the attributes for relation {}'.format(attribute.attribute, relation))
+        else:
+            # import ipdb; ipdb.set_trace()
+            red_flag = True
+            for relation in _relations:
+                attributes = ATTRIBUTES[relation]
+                if attribute.attribute in attributes:
+                    red_flag = False
+            if red_flag:
+                raise Exception('Attribute {} is not an any of the relations in this query'.format(attribute.attribute))
 ###############################################################################
 #                                                                             #
 #  INTERPRETER                                                                #
