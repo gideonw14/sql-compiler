@@ -6,51 +6,52 @@
 
 # Token types
 
-INTEGER         = 'INTEGER'
-STRING          = 'STRING'
-PLUS            = 'PLUS'
-MINUS           = 'MINUS'
-MUL             = 'MUL'
-LPAREN          = 'LPAREN'
-RPAREN          = 'RPAREN'
-ID              = 'ID'
-ASSIGN          = 'ASSIGN'
-SEMI            = 'SEMI'
-DOT             = 'DOT'
-COLON           = 'COLON'
-COMMA           = 'COMMA'
-EOF             = 'EOF'
-KEYWORD         = 'KEYWORD'
-SELECT          = 'SELECT'
-FROM            = 'FROM'
-WHERE           = 'WHERE'
-AS              = 'AS'
-IN              = 'IN'
-CONTAINS        = 'CONTAINS'
-INTERSECT       = 'INTERSECT'
-UNION           = 'UNION'
-EXCEPT          = 'EXCEPT'
-HAVING          = 'HAVING'
-GROUP           = 'GROUP'
-BY              = 'BY'
-AND             = 'AND'
-OR              = 'OR'
-EQUAL           = 'EQUAL'
-GREATER         = 'GREATER'
-LESSER          = 'LESSER'
-GREATEREQUAL    = 'GREATEREQUAL'
-LESSEREQUAL     = 'LESSEREQUAL'
-MIN             = 'MIN'
-MAX             = 'MAX'
-SUM             = 'SUM'
-COUNT           = 'COUNT'
-AVG             = 'AVG'
+INTEGER = 'INTEGER'
+STRING = 'STRING'
+PLUS = 'PLUS'
+MINUS = 'MINUS'
+MUL = 'MUL'
+LPAREN = 'LPAREN'
+RPAREN = 'RPAREN'
+ID = 'ID'
+ASSIGN = 'ASSIGN'
+SEMI = 'SEMI'
+DOT = 'DOT'
+COLON = 'COLON'
+COMMA = 'COMMA'
+EOF = 'EOF'
+KEYWORD = 'KEYWORD'
+SELECT = 'SELECT'
+FROM = 'FROM'
+WHERE = 'WHERE'
+AS = 'AS'
+IN = 'IN'
+CONTAINS = 'CONTAINS'
+INTERSECT = 'INTERSECT'
+UNION = 'UNION'
+EXCEPT = 'EXCEPT'
+HAVING = 'HAVING'
+GROUP = 'GROUP'
+BY = 'BY'
+AND = 'AND'
+OR = 'OR'
+EQUAL = 'EQUAL'
+GREATER = 'GREATER'
+LESSER = 'LESSER'
+GREATEREQUAL = 'GREATEREQUAL'
+LESSEREQUAL = 'LESSEREQUAL'
+MIN = 'MIN'
+MAX = 'MAX'
+SUM = 'SUM'
+COUNT = 'COUNT'
+AVG = 'AVG'
 
 SPACES = 8
 RELATIONS = ('SAILORS', 'BOATS', 'RESERVES')
 ATTRIBUTES = {RELATIONS[0]: ('SID', 'SNAME', 'RATING', 'AGE'),
               RELATIONS[1]: ('BID', 'BNAME', 'COLOR'),
               RELATIONS[2]: ('SID', 'BID', 'DAY')}
+
 
 # Helper Function
 def flatten(S):
@@ -60,11 +61,13 @@ def flatten(S):
         return flatten(S[0]) + flatten(S[1:])
     return S[:1] + flatten(S[1:])
 
+
 class Tree_Node(object):
     def __init__(self, left, right, value):
         self.left = left
         self.right = right
         self.value = value
+
 
 class Token(object):
     def __init__(self, type, value):
@@ -171,7 +174,7 @@ class Lexer(object):
             result += self.current_char
             self.advance()
 
-        token = RESERVED_KEYWORDS.get(result, Token(ID, result)) # Gets the keyword or returns identifier token
+        token = RESERVED_KEYWORDS.get(result, Token(ID, result))  # Gets the keyword or returns identifier token
         return token
 
     def get_next_token(self):
@@ -255,6 +258,7 @@ class Lexer(object):
 class AST(object):
     pass
 
+
 class Rel_Alg_Select(AST):
     def __init__(self, left, op, right, next=None):
         self.left = left
@@ -276,6 +280,7 @@ class Rel_Alg_Select(AST):
 
     def __repr__(self):
         return self.__str__()
+
 
 class Attr(AST):
     def __init__(self, attribute, relation=None):
@@ -338,17 +343,20 @@ class Query(AST):
         self.having = having
         self.nested = nested
 
+
 class Nest_Query(AST):
     def __init__(self, attribute, op, query):
         self.attribute = attribute
         self.op = op
         self.query = query
 
+
 class Set_Op(AST):
     def __init__(self, left=None, right=None, op=None):
         self.left = left
         self.right = right
         self.op = op
+
 
 # class In(AST):
 #     def __init__(self, attribute, select):
@@ -365,7 +373,8 @@ class Parser(object):
     def error(self):
         from colorama import init, Fore
         init(autoreset=True)
-        raise Exception(Fore.RED + 'Invalid syntax near or at "{} {}"'.format(self.prev_token.value, self.current_token.value))
+        raise Exception(
+            Fore.RED + 'Invalid syntax near or at "{} {}"'.format(self.prev_token.value, self.current_token.value))
 
     def eat(self, token_type):
         # compare the current token type with the passed token
@@ -575,7 +584,7 @@ class Parser(object):
             left = self.ag_function()
         else:
             left = self.attribute()
-        if self.current_token.type in (IN,EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
+        if self.current_token.type in (IN, EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
             # Comparison
             token = self.current_token.value
             if self.current_token.type == EQUAL:
@@ -605,10 +614,9 @@ class Parser(object):
                     self.eat(RPAREN)
                 sub_query = Nest_Query(left, token, node)
                 return sub_query
-            else: # attribute
+            else:  # attribute
                 right = self.attribute()
             return Rel_Alg_Select(left, token, right)
-
 
     def parse_sql(self):
         """
@@ -636,7 +644,7 @@ class Parser(object):
         for attribute in query.projects:
             if isinstance(attribute, Attr):
                 self.check_attribute(attribute, _relations, _aliases)
-            #else: Ag Function
+                # else: Ag Function
 
         for condition in query.selects:
             if isinstance(condition, Nest_Query):
@@ -645,7 +653,7 @@ class Parser(object):
                 self.check_attribute(condition.left, _relations, _aliases)
                 if isinstance(condition.right, Attr):
                     self.check_attribute(condition.right, _relations, _aliases)
-            #else its an Ag function
+                    # else its an Ag function
 
     def check_attribute(self, attribute, _relations, _aliases):
         if attribute.relation:
@@ -669,6 +677,8 @@ class Parser(object):
                     red_flag = False
             if red_flag:
                 raise Exception('Attribute {} is not an any of the relations in this query'.format(attribute.attribute))
+
+
 ###############################################################################
 #                                                                             #
 #  INTERPRETER                                                                #
@@ -686,11 +696,6 @@ class NodeVisitor(object):
 
 
 class Interpreter(NodeVisitor):
-
-    GLOBAL_SCOPE = {}
-    QUERIES = list()
-    SET_OPS = list()
-
     def __init__(self, parser):
         self.parser = parser
 
@@ -707,7 +712,7 @@ class Interpreter(NodeVisitor):
         else:
             op = nest_query.op
         if isinstance(nest_query.query, Query):
-            right = nest_query.query.projects.pop(0) #Only one ever
+            right = nest_query.query.projects.pop(0)  # Only one ever
             condition = Rel_Alg_Select(left, op, right, 'AND')
             nest_query.query.selects.insert(0, condition)
         return self.visit(nest_query.query)
@@ -739,7 +744,6 @@ class Interpreter(NodeVisitor):
         if query.having:
             new_query.having = query.having
         return new_query
-
 
     def visit_Rel_Alg_Select(self, node):
         return node.__str__()
@@ -779,6 +783,7 @@ class Interpreter(NodeVisitor):
         if tree is None:
             return ''
         return self.visit(tree)
+
 
 def print_rel_alg(interpreter, end=''):
     from colorama import init, Fore, Back, Style
@@ -821,13 +826,12 @@ def print_rel_alg(interpreter, end=''):
                 print(list[0], end='')
             else:
                 print('{} AS {}'.format(list[0], list[1]), end='')
-            print(']'*idx, end='')
+            print(']' * idx, end='')
         else:
             if len(list) == 1:
                 print('{} X ['.format(list[0]), end='')
             else:
                 print('{} AS {} X ['.format(list[0], list[1]), end='')
-
 
     print(Fore.LIGHTBLUE_EX + ')' + Fore.LIGHTYELLOW_EX + ')', end='')
     if interpreter.having:
@@ -837,8 +841,10 @@ def print_rel_alg(interpreter, end=''):
 
     print(Style.RESET_ALL + end, end='')
 
+
 def build_set_op_tree(set_op):
     return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
+
 
 def build_query_tree(interpreter):
     having_node = None
@@ -874,6 +880,7 @@ def build_query_tree(interpreter):
         return groupby_node
     return tree
 
+
 def build_cross_tree(cross_prods):
     node = Tree_Node(None, None, None)
     if len(cross_prods) == 1:
@@ -890,6 +897,7 @@ def build_cross_tree(cross_prods):
         node.value = 'X'
         return node
 
+
 def print_query_tree(tree, spaces):
     if tree:
         spaces += SPACES
@@ -899,8 +907,8 @@ def print_query_tree(tree, spaces):
             print(' ' * spaces, end='')
             print('/')
         if spaces != 0:
-            print(' '*(spaces - SPACES), end='')
-            print(' |' + '-'*(SPACES-2), end='')
+            print(' ' * (spaces - SPACES), end='')
+            print(' |' + '-' * (SPACES - 2), end='')
         print(tree.value)
         if tree.left != None:
             print(' ' * spaces, end='')
@@ -909,6 +917,72 @@ def print_query_tree(tree, spaces):
         print_query_tree(tree.left, spaces)
         spaces -= SPACES
     return
+
+
+# Join class
+# Attributes:
+#   - left: relation | Pipeline
+#   - right: Join | relation | Pipeline
+#   - op: join conditions | cross
+#   - relations: a list of relations from all children of left and right
+class Join(object):
+    def __init__(self, left=None, op=None, right=None, relations=None):
+        self.left = left
+        self.right = right
+        self.op = op
+        self.relations = relations
+
+# Pipeline class
+# Attributes:
+#   - condition: The condition to perform on the child
+#   - child: relation | Join
+class Pipeline(object):
+    def __init__(self, condition=None, child=None):
+        self.condition = condition
+        self.right = child
+        self.left = None
+
+def build_optimized_tree(query):
+    tree = Pipeline()
+    if query.having:
+        tree.condition = query.having
+        tree.right = Pipeline()
+        pointer = tree.right
+    if query.groupby:
+        if tree.condition:
+            pointer.condition = query.groupby
+            pointer.right = Pipeline()
+            pointer = pointer.right
+        else:
+            tree.condition = query.groupby
+            tree.right = Pipeline()
+            pointer = tree.right
+    if tree.condition:
+        pointer.condition = query.projects
+        pointer.right = Pipeline()
+        pointer = pointer.right
+    else:
+        tree.condition = query.projects
+        tree.right = Pipeline()
+        pointer = tree.right
+    pointer.condition = query.selects
+    pointer.right = Join()
+    pointer = pointer.right
+    while(len(query.relations) > 2):
+        pointer.left = query.relations.pop(0)
+        pointer.op = 'X'
+        pointer.right = Join()
+        pointer.relations = query.relations
+        pointer = pointer.right
+    pointer.left = query.relations[1]
+    pointer.op = 'X'
+    pointer.right = query.relations[0]
+    return tree
+
+def print_optimized_tree(tree):
+    pass
+
+
 
 def main():
     import sys
