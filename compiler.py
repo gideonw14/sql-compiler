@@ -61,10 +61,16 @@ def flatten(S):
     return S[:1] + flatten(S[1:])
 
 class Tree_Node(object):
-    def __init__(self, left, right, value):
+    def __init__(self, left=None, right=None, value=None):
         self.left = left
         self.right = right
         self.value = value
+
+    def __str__(self):
+        return '{} : {} : {}'.format(self.left, self.value, self.right)
+
+    def __repr__(self):
+        return self.__str__()
 
 class Token(object):
     def __init__(self, type, value):
@@ -274,6 +280,9 @@ class Rel_Alg_Select(AST):
             result += ' {}'.format(self.next)
         return result
 
+    def str_no_next(self):
+        return '{} {} {}'.format(self.left.__str__(), self.op, self.right.__str__())
+
     def __repr__(self):
         return self.__str__()
 
@@ -328,6 +337,20 @@ class Rel(AST):
                     return True
         return False
 
+    def same_relation(self, other):
+        if other == self.relation or other == self.alias:
+            return True
+        else:
+            return False
+
+    def __str__(self):
+        result = self.relation
+        if self.alias:
+            result = '{} AS {}'.format(result, self.alias)
+        return result
+
+    def __repr__(self):
+        return self.__str__()
 
 class Query(AST):
     def __init__(self, projects, relations, selects=None, groupby=None, having=None, nested=None):
@@ -815,18 +838,13 @@ def print_rel_alg(interpreter, end=''):
     print('] (' + Fore.WHITE, end='')
 
     print(Fore.RED, end='')
-    for idx, list in enumerate(interpreter.relations):
+    for idx, rel in enumerate(interpreter.relations):
         if idx == len(interpreter.relations) - 1:
-            if len(list) == 1:
-                print(list[0], end='')
-            else:
-                print('{} AS {}'.format(list[0], list[1]), end='')
+            print(rel, end='')
             print(']'*idx, end='')
         else:
-            if len(list) == 1:
-                print('{} X ['.format(list[0]), end='')
-            else:
-                print('{} AS {} X ['.format(list[0], list[1]), end='')
+            print(rel, end='')
+            print(' [', end='')
 
 
     print(Fore.LIGHTBLUE_EX + ')' + Fore.LIGHTYELLOW_EX + ')', end='')
@@ -910,6 +928,66 @@ def print_query_tree(tree, spaces):
         spaces -= SPACES
     return
 
+def build_top_query_tree(query):
+    tree = Tree_Node()
+    if query.having:
+        tree.value = 'HAVING {}'.format(query.having)
+        if query.groupby:
+            tree.left = Tree_Node(value='GROUP BY {}'.format(query.groupby))
+            tree.left.left = build_optimized_query_tree(query)
+    elif query.groupby:
+        tree.value = 'GROUP BY {}'.format(query.groupby)
+        tree.left = build_optimized_query_tree(query)
+    else:
+        tree = build_optimized_query_tree(query)
+    return tree
+
+def build_optimized_query_tree(query):
+    joins = list()
+    for item in query.selects:
+        if isinstance(item.right, Attr):
+            left_relation = None
+            right_relation = None
+            for rel in query.relations:
+                if rel.same_relation(item.right.relation):
+                    right_relation = rel
+                if rel.same_relation(item.left.relation):
+                    left_relation = rel
+            if left_relation and right_relation and item.left.attribute == item.right.attribute:
+                joins.append(Tree_Node(left_relation, right_relation, item.str_no_next()))
+
+    print(joins)
+
+    return build_join_tree(query.relations, joins)
+
+def build_join_tree(cross_prods, joins):
+    node = Tree_Node()
+    flag = True
+    if len(cross_prods) == 1:
+        node.value = cross_prods[0]
+        return node
+    elif len(cross_prods) == 2:
+        node.left = Tree_Node(None, None, cross_prods[1])
+        node.right = Tree_Node(None, None, cross_prods[0])
+        for join in joins:
+            if node.left.value == join.left or node.left.value == join.right:
+                if node.right.value == join.left or node.right.value == join.right:
+                    node.value = '|><| {}'.format(join.value)
+                    flag = False
+        if flag:
+            node.value = 'X'
+        return node
+    else:
+        node.right = Tree_Node(None, None, cross_prods.pop(0))
+        for join in joins:
+            if node.right.value == join.left or node.right.value == join.right:
+                node.value = '|><| {}'.format(join.value)
+                flag = False
+        if flag:
+            node.value = 'X'
+        node.left = build_join_tree(cross_prods, joins)
+        return node
+
 def main():
     import sys
     test_case = input('Test case (a-o): ')
@@ -917,8 +995,8 @@ def main():
     text = text.upper()
     lexer = Lexer(text)
     parser = Parser(lexer)
-    interpreter = Interpreter(parser)
-    result = interpreter.interpret()
+    # interpreter = Interpreter(parser)
+    result = parser.parse_sql()
     print('######################################')
     print('#          Relation Algebra          #')
     print('######################################\n')
@@ -926,7 +1004,7 @@ def main():
     print('######################################')
     print('#            Query Tree              #')
     print('######################################\n')
-    tree = build_query_tree(result)
+    tree = build_top_query_tree(result)
     print_query_tree(tree, 0)
 
 
