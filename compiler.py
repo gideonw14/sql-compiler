@@ -679,6 +679,7 @@ class Parser(object):
         for condition in query.selects:
             if isinstance(condition, Nest_Query):
                 self.check_syntax(condition.query)
+                self.check_attribute(condition.attribute, _relations, _aliases)
             elif isinstance(condition, Rel_Alg_Select):
                 self.check_attribute(condition.left, _relations, _aliases)
                 if isinstance(condition.right, Attr):
@@ -794,12 +795,7 @@ class Interpreter(NodeVisitor):
         return node
 
     def visit_Ag_Function(self, node):
-        ag_function = node.function
-        attribute = self.visit(node.attribute)
-        ag_function += '(' + attribute + ')'
-        if node.alias:
-            ag_function += ' AS ' + node.alias
-        return ag_function
+        return node
 
     def visit_Rel(self, node):
         return node
@@ -865,14 +861,29 @@ def print_rel_alg(interpreter, end=''):
 def build_set_op_tree(set_op):
     return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
 
-def build_query_tree(interpreter, tokenized):
+def build_query_tree(interpreter, tokenized=None):
     # import ipdb;
     # ipdb.set_trace()
     select_optimize = dict()
+    join_optimize = list()
+    project_optimize = set()
+    for project in interpreter.projects:
+        if isinstance(project, Attr):
+            if not project.relation:
+                for key in ATTRIBUTES:
+                    for item in ATTRIBUTES[key]:
+                        if project.attribute == item:
+                            project.relation = key
+            project_optimize.add(project)
     remove_later = list()
     for condition in interpreter.selects:
         if not isinstance(condition.right, Attr):
             select_optimize[condition.left.relation.__str__()] = condition.str_no_next()
+            remove_later.append(condition)
+        else:
+            join_optimize.append(condition)
+            project_optimize.add(condition.left)
+            project_optimize.add(condition.right)
             remove_later.append(condition)
     for item in remove_later:
         interpreter.selects.remove(item)
@@ -903,7 +914,7 @@ def build_query_tree(interpreter, tokenized):
         tree.left = select_node
     # import ipdb
     # ipdb.set_trace()
-    cross_node = build_cross_tree(interpreter.relations, select_optimize)
+    cross_node = build_cross_tree(interpreter.relations, select_optimize, project_optimize, join_optimize)
     if interpreter.selects:
         tree.left.left = cross_node
     else:
@@ -916,33 +927,117 @@ def build_query_tree(interpreter, tokenized):
         return groupby_node
     return tree
 
-def build_cross_tree(cross_prods, select_optimize):
+def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimize):
     node = Tree_Node(None, None, None)
+    project_left = Tree_Node(value=list())
+    select_left = Tree_Node()
+    left = Tree_Node()
+    project_right = Tree_Node(value=list())
+    select_right = Tree_Node()
+    right = Tree_Node()
     # import ipdb;
     # ipdb.set_trace()
     if len(cross_prods) == 1:
         node.value = cross_prods[0]
         return node
     elif len(cross_prods) == 2:
+        left.value=cross_prods[0]
+        right.value=cross_prods[1]
+        for item in project_optimize:
+            if item.relation == cross_prods[0].alias or item.relation == cross_prods[0].relation:
+                project_left.value.append(item)
+            elif item.relation == cross_prods[1].alias or item.relation == cross_prods[0].relation:
+                project_right.value.append(item)
 
         if cross_prods[0].alias in select_optimize.keys():
-            node.left = Tree_Node(value = select_optimize[cross_prods[0].alias], left=Tree_Node(value=cross_prods[0]))
-        else:
-            node.left = Tree_Node(None, None, cross_prods[0])
+            select_left.value = select_optimize[cross_prods[0].alias]
+        elif cross_prods[0].relation in select_optimize.keys():
+            select_left.value = select_optimize[cross_prods[0].relation]
         if cross_prods[1].alias in select_optimize.keys():
-            node.right = Tree_Node(value = select_optimize[cross_prods[1].alias], left=Tree_Node(value=cross_prods[1]))
+            select_right.value = select_optimize[cross_prods[1].alias]
+        elif cross_prods[1].relation in select_optimize.keys():
+            select_right.value = select_optimize[cross_prods[1].relation]
+
+        flag = True
+        for join in join_optimize:
+            if cross_prods[0].alias == join.left.relation or cross_prods[0].relation == join.left.relation or  cross_prods[0].alias == join.right.relation or cross_prods[0].relation == join.right.relation:
+                node.value = '|><| {}'.format(join.str_no_next())
+                flag = False
+        if flag:
+            node.value = 'X'
+        # import ipdb; ipdb.set_trace()
+        if project_left.value:
+            if select_left.value:
+                select_left.left = left
+                project_left.left = select_left
+                node.left = project_left
+            else:
+                project_left.left = left
+                node.left = project_left
+        elif select_left.value:
+            select_left.left = left
+            node.left = select_left
         else:
-            node.right = Tree_Node(None, None, cross_prods[1])
-        node.value = 'X'
+            node.left = left
+
+        if project_right.value:
+            if select_right.value:
+                select_right.left = right
+                project_right.left = select_right
+                node.right = project_right
+            else:
+                project_right.left = right
+                node.right = project_right
+        elif select_right.value:
+            select_right.left = right
+            node.right = select_right
+        else:
+            node.right = right
+
         return node
     else:
+        # import ipdb; ipdb.set_trace()
         cross_prod = cross_prods.pop(0)
+        right.value = cross_prod
+        for item in project_optimize:
+            if item.relation == cross_prod.alias or item.relation == cross_prod.relation:
+                project_right.value.append(item)
+
         if cross_prod.alias in select_optimize.keys():
-            node.right = Tree_Node(value = select_optimize[cross_prod.alias], left=Tree_Node(value=cross_prod))
+            select_right.value = select_optimize[cross_prod.alias]
+
+        if project_right.value:
+            if select_right.value:
+                select_right.left = right
+                project_right.left = select_right
+                node.right = project_right
+            else:
+                project_right.left = right
+                node.right = project_right
+        elif select_right.value:
+            select_right.left = right
+            node.right = select_right
         else:
-            node.right = Tree_Node(None, None, cross_prod)
-        node.left = build_cross_tree(cross_prods, select_optimize)
-        node.value = 'X'
+            node.right = right
+
+
+        flag = True
+        # import ipdb; ipdb.set_trace()
+        for join in join_optimize:
+            if cross_prod.alias == join.left.relation or cross_prod.relation == join.left.relation:
+                for cross in cross_prods:
+                    if join.right.relation == cross.alias or join.right.relation == cross.relation:
+                        node.value = '|><| {}'.format(join.str_no_next())
+                        flag = False
+            elif cross_prod.alias == join.right.relation or cross_prod.relation == join.right.relation:
+                for cross in cross_prods:
+                    if join.left.relation == cross.alias or join.left.relation == cross.relation:
+                        node.value = '|><| {}'.format(join.str_no_next())
+                        flag = False
+        if flag:
+            node.value = 'X'
+
+        node.left = build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimize)
         return node
 
 def print_query_tree(tree, spaces):
@@ -950,14 +1045,14 @@ def print_query_tree(tree, spaces):
         spaces += SPACES
         print_query_tree(tree.right, spaces)
         spaces -= SPACES
-        if tree.right != None:
+        if tree.right:
             print(' ' * spaces, end='')
             print('/')
         if spaces != 0:
             print(' '*(spaces - SPACES), end='')
             print(' |' + '-'*(SPACES-2), end='')
         print(tree.value)
-        if tree.left != None:
+        if tree.left:
             print(' ' * spaces, end='')
             print('\\')
         spaces += SPACES
