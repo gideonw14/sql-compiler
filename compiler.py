@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 ###############################################################################
 #                                                                             #
 #  LEXER                                                                      #
@@ -45,6 +47,8 @@ MAX             = 'MAX'
 SUM             = 'SUM'
 COUNT           = 'COUNT'
 AVG             = 'AVG'
+_NOT            = 'NOT'
+EXISTS          = 'EXISTS'
 
 SPACES = 8
 RELATIONS = ('SAILORS', 'BOATS', 'RESERVES')
@@ -114,6 +118,8 @@ RESERVED_KEYWORDS = {
     'COUNT': Token('COUNT', 'COUNT'),
     'SUM': Token('SUM', 'SUM'),
     'AVG': Token('AVG', 'AVG'),
+    'NOT': Token('NOT', 'NOT'),
+    'EXISTS': Token('EXISTS', 'EXISTS'),
 
 }
 
@@ -329,12 +335,16 @@ class Rel(AST):
             self.alias = None
 
     def __eq__(self, other):
-        if self.relation == other.relation:
-            if not self.alias and not other.alias:
+        if isinstance(other, str):
+            if self.relation.__str__() == other:
                 return True
-            if self.alias and other.alias:
-                if self.alias == other.alias:
+        else:
+            if self.relation == other.relation:
+                if not self.alias and not other.alias:
                     return True
+                if self.alias and other.alias:
+                    if self.alias == other.alias:
+                        return True
         return False
 
     def same_relation(self, other):
@@ -591,11 +601,15 @@ class Parser(object):
     def condition(self):
         """
         condition : attribute (EQUAL | GREATER | LESSER | GREATEREQUAL | LESSEREQUAL) (attribute | INTEGER | STRING)
-                  | attribute IN LPAREN sql_compound_statement RPAREN
+                  | attribute (IN | NOT EXISTS) LPAREN sql_compound_statement RPAREN
         """
         # Left is always attribute
         if self.current_token.type in (SUM, COUNT, MAX, MIN, AVG):
             left = self.ag_function()
+        elif self.current_token.type == _NOT:
+            token = 'AND NOT'
+            self.eat(_NOT)
+            self.eat(EXISTS)
         else:
             left = self.attribute()
         if self.current_token.type in (IN,EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
@@ -613,6 +627,7 @@ class Parser(object):
                 self.eat(LESSEREQUAL)
             elif self.current_token.type == IN:
                 self.eat(IN)
+
 
             # Right: integer, string, or attribute
             if self.current_token.type == INTEGER:
@@ -765,7 +780,7 @@ class Interpreter(NodeVisitor):
 
 
     def visit_Rel_Alg_Select(self, node):
-        return node.__str__()
+        return node
 
     def visit_list(self, node):
         for item in node:
@@ -776,11 +791,7 @@ class Interpreter(NodeVisitor):
             self.visit(child)
 
     def visit_Attr(self, node):
-        atr_name = node.attribute
-        if node.relation:
-            rel_name = node.relation
-            atr_name = rel_name + '.' + atr_name
-        return atr_name
+        return node
 
     def visit_Ag_Function(self, node):
         ag_function = node.function
@@ -791,11 +802,7 @@ class Interpreter(NodeVisitor):
         return ag_function
 
     def visit_Rel(self, node):
-        rel_name = list()
-        rel_name.append(node.relation)
-        if node.alias:
-            rel_name.append(node.alias)
-        return rel_name
+        return node
 
     def interpret(self):
         tree = self.parser.parse_sql()
@@ -844,7 +851,7 @@ def print_rel_alg(interpreter, end=''):
             print(']'*idx, end='')
         else:
             print(rel, end='')
-            print(' [', end='')
+            print(' X [', end='')
 
 
     print(Fore.LIGHTBLUE_EX + ')' + Fore.LIGHTYELLOW_EX + ')', end='')
@@ -858,7 +865,18 @@ def print_rel_alg(interpreter, end=''):
 def build_set_op_tree(set_op):
     return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
 
-def build_query_tree(interpreter):
+def build_query_tree(interpreter, tokenized):
+    # import ipdb;
+    # ipdb.set_trace()
+    select_optimize = dict()
+    remove_later = list()
+    for condition in interpreter.selects:
+        if not isinstance(condition.right, Attr):
+            select_optimize[condition.left.relation.__str__()] = condition.str_no_next()
+            remove_later.append(condition)
+    for item in remove_later:
+        interpreter.selects.remove(item)
+    # import ipdb; ipdb.set_trace()
     having_node = None
     groupby_node = None
     if interpreter.having:
@@ -868,22 +886,28 @@ def build_query_tree(interpreter):
     project = 'PROJECT ['
     for idx, item in enumerate(interpreter.projects):
         if idx == len(interpreter.projects) - 1:
-            project += item
+            project += item.__str__()
         else:
-            project += '{}, '.format(item)
+            project += '{}, '.format(item.__str__())
     project += ']'
     tree = Tree_Node(None, None, project)
-    select = 'SELECT ['
-    for idx, item in enumerate(interpreter.selects):
-        if idx == len(interpreter.selects) - 1:
-            select += item
-        else:
-            select += '{} '.format(item)
-    select += ']'
-    select_node = Tree_Node(None, None, select)
-    tree.left = select_node
-    cross_node = build_cross_tree(interpreter.relations)
-    tree.left.left = cross_node
+    if interpreter.selects:
+        select = 'SELECT ['
+        for idx, item in enumerate(interpreter.selects):
+            if idx == len(interpreter.selects) - 1:
+                select += item.__str__()
+            else:
+                select += '{} '.format(item.__str__())
+        select += ']'
+        select_node = Tree_Node(None, None, select)
+        tree.left = select_node
+    # import ipdb
+    # ipdb.set_trace()
+    cross_node = build_cross_tree(interpreter.relations, select_optimize)
+    if interpreter.selects:
+        tree.left.left = cross_node
+    else:
+        tree.left = cross_node
     if groupby_node:
         groupby_node.left = tree
         if having_node:
@@ -892,19 +916,32 @@ def build_query_tree(interpreter):
         return groupby_node
     return tree
 
-def build_cross_tree(cross_prods):
+def build_cross_tree(cross_prods, select_optimize):
     node = Tree_Node(None, None, None)
+    # import ipdb;
+    # ipdb.set_trace()
     if len(cross_prods) == 1:
         node.value = cross_prods[0]
         return node
     elif len(cross_prods) == 2:
-        node.left = Tree_Node(None, None, cross_prods[0])
-        node.right = Tree_Node(None, None, cross_prods[1])
+
+        if cross_prods[0].alias in select_optimize.keys():
+            node.left = Tree_Node(value = select_optimize[cross_prods[0].alias], left=Tree_Node(value=cross_prods[0]))
+        else:
+            node.left = Tree_Node(None, None, cross_prods[0])
+        if cross_prods[1].alias in select_optimize.keys():
+            node.right = Tree_Node(value = select_optimize[cross_prods[1].alias], left=Tree_Node(value=cross_prods[1]))
+        else:
+            node.right = Tree_Node(None, None, cross_prods[1])
         node.value = 'X'
         return node
     else:
-        node.right = Tree_Node(None, None, cross_prods.pop(0))
-        node.left = build_cross_tree(cross_prods)
+        cross_prod = cross_prods.pop(0)
+        if cross_prod.alias in select_optimize.keys():
+            node.right = Tree_Node(value = select_optimize[cross_prod.alias], left=Tree_Node(value=cross_prod))
+        else:
+            node.right = Tree_Node(None, None, cross_prod)
+        node.left = build_cross_tree(cross_prods, select_optimize)
         node.value = 'X'
         return node
 
@@ -928,65 +965,85 @@ def print_query_tree(tree, spaces):
         spaces -= SPACES
     return
 
-def build_top_query_tree(query):
-    tree = Tree_Node()
-    if query.having:
-        tree.value = 'HAVING {}'.format(query.having)
-        if query.groupby:
-            tree.left = Tree_Node(value='GROUP BY {}'.format(query.groupby))
-            tree.left.left = build_optimized_query_tree(query)
-    elif query.groupby:
-        tree.value = 'GROUP BY {}'.format(query.groupby)
-        tree.left = build_optimized_query_tree(query)
-    else:
-        tree = build_optimized_query_tree(query)
-    return tree
+def print_flat_tree(tree):
+    if tree:
+        print_flat_tree(tree.right)
+        if tree.value == 'X':
+            end = ' ['
+        else:
+            end = ' -> '
+        print(tree.value, end=end)
+        print_flat_tree(tree.left)
+    return
 
-def build_optimized_query_tree(query):
-    joins = list()
-    for item in query.selects:
-        if isinstance(item.right, Attr):
-            left_relation = None
-            right_relation = None
-            for rel in query.relations:
-                if rel.same_relation(item.right.relation):
-                    right_relation = rel
-                if rel.same_relation(item.left.relation):
-                    left_relation = rel
-            if left_relation and right_relation and item.left.attribute == item.right.attribute:
-                joins.append(Tree_Node(left_relation, right_relation, item.str_no_next()))
+# def build_top_query_tree(query):
+#     tree = Tree_Node()
+#     if query.having:
+#         tree.value = 'HAVING {}'.format(query.having)
+#         if query.groupby:
+#             tree.left = Tree_Node(value='GROUP BY {}'.format(query.groupby))
+#             tree.left.left = build_optimized_query_tree(query)
+#     elif query.groupby:
+#         tree.value = 'GROUP BY {}'.format(query.groupby)
+#         tree.left = build_optimized_query_tree(query)
+#     else:
+#         tree = build_optimized_query_tree(query)
+#     return tree
 
-    print(joins)
+# def build_optimized_query_tree(query):
+#     joins = list()
+#     for item in query.selects:
+#         if isinstance(item, Nest_Query):
+#             query.selects.remove(item)
+#             for select in item.query.selects:
+#                 query.selects.append(select)
+#             for relation in item.query.relations:
+#                 query.relations.append(relation)
+#             query.selects.append(Rel_Alg_Select(item.attribute, item.op, item.query.projects[0]))
+#             joins.append(build_join_tree(query.relations, joins))
+#
+#         elif isinstance(item.right, Attr):
+#             left_relation = None
+#             right_relation = None
+#             for rel in query.relations:
+#                 if rel.same_relation(item.right.relation):
+#                     right_relation = rel
+#                 if rel.same_relation(item.left.relation):
+#                     left_relation = rel
+#             if left_relation and right_relation and item.left.attribute == item.right.attribute:
+#                 joins.append(Tree_Node(left_relation, right_relation, item.str_no_next()))
+#
+#     print(joins)
+#
+#     return build_join_tree(query.relations, joins)
 
-    return build_join_tree(query.relations, joins)
-
-def build_join_tree(cross_prods, joins):
-    node = Tree_Node()
-    flag = True
-    if len(cross_prods) == 1:
-        node.value = cross_prods[0]
-        return node
-    elif len(cross_prods) == 2:
-        node.left = Tree_Node(None, None, cross_prods[1])
-        node.right = Tree_Node(None, None, cross_prods[0])
-        for join in joins:
-            if node.left.value == join.left or node.left.value == join.right:
-                if node.right.value == join.left or node.right.value == join.right:
-                    node.value = '|><| {}'.format(join.value)
-                    flag = False
-        if flag:
-            node.value = 'X'
-        return node
-    else:
-        node.right = Tree_Node(None, None, cross_prods.pop(0))
-        for join in joins:
-            if node.right.value == join.left or node.right.value == join.right:
-                node.value = '|><| {}'.format(join.value)
-                flag = False
-        if flag:
-            node.value = 'X'
-        node.left = build_join_tree(cross_prods, joins)
-        return node
+# def build_join_tree(cross_prods, joins):
+#     node = Tree_Node()
+#     flag = True
+#     if len(cross_prods) == 1:
+#         node.value = cross_prods[0]
+#         return node
+#     elif len(cross_prods) == 2:
+#         node.left = Tree_Node(None, None, cross_prods[1])
+#         node.right = Tree_Node(None, None, cross_prods[0])
+#         for join in joins:
+#             if node.left.value == join.left or node.left.value == join.right:
+#                 if node.right.value == join.left or node.right.value == join.right:
+#                     node.value = '|><| {}'.format(join.value)
+#                     flag = False
+#         if flag:
+#             node.value = 'X'
+#         return node
+#     else:
+#         node.right = Tree_Node(None, None, cross_prods.pop(0))
+#         for join in joins:
+#             if node.right.value == join.left or node.right.value == join.right:
+#                 node.value = '|><| {}'.format(join.value)
+#                 flag = False
+#         if flag:
+#             node.value = 'X'
+#         node.left = build_join_tree(cross_prods, joins)
+#         return node
 
 def main():
     import sys
@@ -995,8 +1052,13 @@ def main():
     text = text.upper()
     lexer = Lexer(text)
     parser = Parser(lexer)
-    # interpreter = Interpreter(parser)
-    result = parser.parse_sql()
+    parser_copy = deepcopy(parser)
+    tokenized = parser_copy.parse_sql()
+    interpreter = Interpreter(parser)
+    # import  ipdb; ipdb.set_trace()
+    result = interpreter.interpret()
+
+    number_of_relations = len(result.relations)
     print('######################################')
     print('#          Relation Algebra          #')
     print('######################################\n')
@@ -1004,8 +1066,11 @@ def main():
     print('######################################')
     print('#            Query Tree              #')
     print('######################################\n')
-    tree = build_top_query_tree(result)
+    tree = build_query_tree(result, tokenized)
     print_query_tree(tree, 0)
+    print_flat_tree(tree)
+    # import ipdb; ipdb.set_trace()
+    print(']'*number_of_relations)
 
 
 if __name__ == '__main__':
