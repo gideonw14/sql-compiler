@@ -610,6 +610,13 @@ class Parser(object):
             token = 'AND NOT'
             self.eat(_NOT)
             self.eat(EXISTS)
+            self.eat(LPAREN)
+            node = self.query()
+            if self.current_token.type == RPAREN:
+                self.eat(RPAREN)
+            sub_query = Nest_Query(attribute=None, op=token, query=node)
+            return sub_query
+
         else:
             left = self.attribute()
         if self.current_token.type in (IN,EQUAL, GREATER, LESSER, GREATEREQUAL, LESSEREQUAL):
@@ -648,13 +655,14 @@ class Parser(object):
             return Rel_Alg_Select(left, token, right)
 
 
-    def parse_sql(self):
+    def parse_sql(self, check):
         """
         query: sql_compound_statement
         sql_compound_statement: SELECT attributes FROM (relations | query) WHERE (conditions | attributes IN query)
         """
         node = self.query()
-        self.check_syntax(node)
+        if not check == 'j':
+            self.check_syntax(node)
         if self.current_token.type != EOF:
             self.error()
         self.eat(EOF)
@@ -679,7 +687,8 @@ class Parser(object):
         for condition in query.selects:
             if isinstance(condition, Nest_Query):
                 self.check_syntax(condition.query)
-                self.check_attribute(condition.attribute, _relations, _aliases)
+                if condition.attribute:
+                    self.check_attribute(condition.attribute, _relations, _aliases)
             elif isinstance(condition, Rel_Alg_Select):
                 self.check_attribute(condition.left, _relations, _aliases)
                 if isinstance(condition.right, Attr):
@@ -700,7 +709,6 @@ class Parser(object):
                     raise Exception(
                         'Attribute {} is not in the attributes for relation {}'.format(attribute.attribute, relation))
         else:
-            # import ipdb; ipdb.set_trace()
             red_flag = True
             for relation in _relations:
                 attributes = ATTRIBUTES[relation]
@@ -740,15 +748,16 @@ class Interpreter(NodeVisitor):
         return Set_Op(left, right, op)
 
     def visit_Nest_Query(self, nest_query):
-        left = nest_query.attribute
-        if nest_query.op == 'IN':
-            op = '='
-        else:
-            op = nest_query.op
-        if isinstance(nest_query.query, Query):
-            right = nest_query.query.projects.pop(0) #Only one ever
-            condition = Rel_Alg_Select(left, op, right, 'AND')
-            nest_query.query.selects.insert(0, condition)
+        if nest_query.attribute:
+            left = nest_query.attribute
+            if nest_query.op == 'IN':
+                op = '='
+            else:
+                op = nest_query.op
+            if isinstance(nest_query.query, Query):
+                right = nest_query.query.projects.pop(0) #Only one ever
+                condition = Rel_Alg_Select(left, op, right, 'AND')
+                nest_query.query.selects.insert(0, condition)
         return self.visit(nest_query.query)
 
     def visit_Query(self, query):
@@ -800,8 +809,8 @@ class Interpreter(NodeVisitor):
     def visit_Rel(self, node):
         return node
 
-    def interpret(self):
-        tree = self.parser.parse_sql()
+    def interpret(self, check):
+        tree = self.parser.parse_sql(check)
         if tree is None:
             return ''
         return self.visit(tree)
@@ -862,8 +871,6 @@ def build_set_op_tree(set_op):
     return Tree_Node(build_query_tree(set_op.left), build_query_tree(set_op.right), set_op.op)
 
 def build_query_tree(interpreter, tokenized=None):
-    # import ipdb;
-    # ipdb.set_trace()
     select_optimize = dict()
     join_optimize = list()
     project_optimize = set()
@@ -876,18 +883,21 @@ def build_query_tree(interpreter, tokenized=None):
                             project.relation = key
             project_optimize.add(project)
     remove_later = list()
-    for condition in interpreter.selects:
-        if not isinstance(condition.right, Attr):
-            select_optimize[condition.left.relation.__str__()] = condition.str_no_next()
-            remove_later.append(condition)
+    for cond in interpreter.selects:
+        if not isinstance(cond.right, Attr):
+            if cond.left.relation in select_optimize.keys():
+                select_optimize[cond.left.relation].append(cond.str_no_next())
+            else:
+                select_optimize[cond.left.relation] = list()
+                select_optimize[cond.left.relation].append(cond.str_no_next())
+            remove_later.append(cond)
         else:
-            join_optimize.append(condition)
-            project_optimize.add(condition.left)
-            project_optimize.add(condition.right)
-            remove_later.append(condition)
+            join_optimize.append(cond)
+            project_optimize.add(cond.left)
+            project_optimize.add(cond.right)
+            remove_later.append(cond)
     for item in remove_later:
         interpreter.selects.remove(item)
-    # import ipdb; ipdb.set_trace()
     having_node = None
     groupby_node = None
     if interpreter.having:
@@ -912,8 +922,6 @@ def build_query_tree(interpreter, tokenized=None):
         select += ']'
         select_node = Tree_Node(None, None, select)
         tree.left = select_node
-    # import ipdb
-    # ipdb.set_trace()
     cross_node = build_cross_tree(interpreter.relations, select_optimize, project_optimize, join_optimize)
     if interpreter.selects:
         tree.left.left = cross_node
@@ -930,15 +938,15 @@ def build_query_tree(interpreter, tokenized=None):
 def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimize):
     node = Tree_Node(None, None, None)
     project_left = Tree_Node(value=list())
-    select_left = Tree_Node()
+    select_left = Tree_Node(value=list())
     left = Tree_Node()
     project_right = Tree_Node(value=list())
-    select_right = Tree_Node()
+    select_right = Tree_Node(value=list())
     right = Tree_Node()
-    # import ipdb;
-    # ipdb.set_trace()
     if len(cross_prods) == 1:
-        node.value = cross_prods[0]
+        # import ipdb; ipdb.set_trace()
+        node.value = select_optimize[cross_prods[0].alias]
+        node.left = Tree_Node(value=cross_prods[0])
         return node
     elif len(cross_prods) == 2:
         left.value=cross_prods[0]
@@ -948,15 +956,14 @@ def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimi
                 project_left.value.append(item)
             elif item.relation == cross_prods[1].alias or item.relation == cross_prods[0].relation:
                 project_right.value.append(item)
-
         if cross_prods[0].alias in select_optimize.keys():
-            select_left.value = select_optimize[cross_prods[0].alias]
+            select_left.value.append(select_optimize[cross_prods[0].alias])
         elif cross_prods[0].relation in select_optimize.keys():
-            select_left.value = select_optimize[cross_prods[0].relation]
+            select_left.value.append(select_optimize[cross_prods[0].relation])
         if cross_prods[1].alias in select_optimize.keys():
-            select_right.value = select_optimize[cross_prods[1].alias]
+            select_right.value.append(select_optimize[cross_prods[1].alias])
         elif cross_prods[1].relation in select_optimize.keys():
-            select_right.value = select_optimize[cross_prods[1].relation]
+            select_right.value.append(select_optimize[cross_prods[1].relation])
 
         flag = True
         for join in join_optimize:
@@ -965,7 +972,6 @@ def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimi
                 flag = False
         if flag:
             node.value = 'X'
-        # import ipdb; ipdb.set_trace()
         if project_left.value:
             if select_left.value:
                 select_left.left = left
@@ -996,7 +1002,6 @@ def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimi
 
         return node
     else:
-        # import ipdb; ipdb.set_trace()
         cross_prod = cross_prods.pop(0)
         right.value = cross_prod
         for item in project_optimize:
@@ -1004,7 +1009,7 @@ def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimi
                 project_right.value.append(item)
 
         if cross_prod.alias in select_optimize.keys():
-            select_right.value = select_optimize[cross_prod.alias]
+            select_right.value.append(select_optimize[cross_prod.alias])
 
         if project_right.value:
             if select_right.value:
@@ -1022,7 +1027,6 @@ def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimi
 
 
         flag = True
-        # import ipdb; ipdb.set_trace()
         for join in join_optimize:
             if cross_prod.alias == join.left.relation or cross_prod.relation == join.left.relation:
                 for cross in cross_prods:
@@ -1071,74 +1075,6 @@ def print_flat_tree(tree):
         print_flat_tree(tree.left)
     return
 
-# def build_top_query_tree(query):
-#     tree = Tree_Node()
-#     if query.having:
-#         tree.value = 'HAVING {}'.format(query.having)
-#         if query.groupby:
-#             tree.left = Tree_Node(value='GROUP BY {}'.format(query.groupby))
-#             tree.left.left = build_optimized_query_tree(query)
-#     elif query.groupby:
-#         tree.value = 'GROUP BY {}'.format(query.groupby)
-#         tree.left = build_optimized_query_tree(query)
-#     else:
-#         tree = build_optimized_query_tree(query)
-#     return tree
-
-# def build_optimized_query_tree(query):
-#     joins = list()
-#     for item in query.selects:
-#         if isinstance(item, Nest_Query):
-#             query.selects.remove(item)
-#             for select in item.query.selects:
-#                 query.selects.append(select)
-#             for relation in item.query.relations:
-#                 query.relations.append(relation)
-#             query.selects.append(Rel_Alg_Select(item.attribute, item.op, item.query.projects[0]))
-#             joins.append(build_join_tree(query.relations, joins))
-#
-#         elif isinstance(item.right, Attr):
-#             left_relation = None
-#             right_relation = None
-#             for rel in query.relations:
-#                 if rel.same_relation(item.right.relation):
-#                     right_relation = rel
-#                 if rel.same_relation(item.left.relation):
-#                     left_relation = rel
-#             if left_relation and right_relation and item.left.attribute == item.right.attribute:
-#                 joins.append(Tree_Node(left_relation, right_relation, item.str_no_next()))
-#
-#     print(joins)
-#
-#     return build_join_tree(query.relations, joins)
-
-# def build_join_tree(cross_prods, joins):
-#     node = Tree_Node()
-#     flag = True
-#     if len(cross_prods) == 1:
-#         node.value = cross_prods[0]
-#         return node
-#     elif len(cross_prods) == 2:
-#         node.left = Tree_Node(None, None, cross_prods[1])
-#         node.right = Tree_Node(None, None, cross_prods[0])
-#         for join in joins:
-#             if node.left.value == join.left or node.left.value == join.right:
-#                 if node.right.value == join.left or node.right.value == join.right:
-#                     node.value = '|><| {}'.format(join.value)
-#                     flag = False
-#         if flag:
-#             node.value = 'X'
-#         return node
-#     else:
-#         node.right = Tree_Node(None, None, cross_prods.pop(0))
-#         for join in joins:
-#             if node.right.value == join.left or node.right.value == join.right:
-#                 node.value = '|><| {}'.format(join.value)
-#                 flag = False
-#         if flag:
-#             node.value = 'X'
-#         node.left = build_join_tree(cross_prods, joins)
-#         return node
 
 def main():
     import sys
@@ -1148,10 +1084,9 @@ def main():
     lexer = Lexer(text)
     parser = Parser(lexer)
     parser_copy = deepcopy(parser)
-    tokenized = parser_copy.parse_sql()
+    tokenized = parser_copy.parse_sql(test_case)
     interpreter = Interpreter(parser)
-    # import  ipdb; ipdb.set_trace()
-    result = interpreter.interpret()
+    result = interpreter.interpret(test_case)
 
     number_of_relations = len(result.relations)
     print('######################################')
@@ -1163,9 +1098,8 @@ def main():
     print('######################################\n')
     tree = build_query_tree(result, tokenized)
     print_query_tree(tree, 0)
-    print_flat_tree(tree)
-    # import ipdb; ipdb.set_trace()
-    print(']'*number_of_relations)
+    # print_flat_tree(tree)
+    # print(']'*number_of_relations)
 
 
 if __name__ == '__main__':
