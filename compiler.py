@@ -1,3 +1,10 @@
+"""
+Programmer: Gideon Walker and Ryan Leas
+Date: 11/30/17
+Class: CS 5300 Databases
+Assignment: Part 2 of the SQL Compiler Project
+"""
+
 from copy import deepcopy
 
 ###############################################################################
@@ -433,7 +440,6 @@ class Parser(object):
                                 (HAVING condition_list)?
                                 (INTERSECT | UNION | EXCEPT | CONTAINS sql_compound_statement)?
         """
-        # import ipdb; ipdb.set_trace()
         cond_nodes = list()
         group_by_list = list()
         having_list = list()
@@ -944,7 +950,6 @@ def build_cross_tree(cross_prods, select_optimize, project_optimize, join_optimi
     select_right = Tree_Node(value=list())
     right = Tree_Node()
     if len(cross_prods) == 1:
-        # import ipdb; ipdb.set_trace()
         node.value = select_optimize[cross_prods[0].alias]
         node.left = Tree_Node(value=cross_prods[0])
         return node
