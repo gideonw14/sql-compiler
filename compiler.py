@@ -1,3 +1,10 @@
+"""
+Programmer: Gideon Walker and Ryan Leas
+Date: 11/30/17
+Class: CS 5300 Databases
+Assignment: Part 2 of the SQL Compiler Project
+"""
+
 ###############################################################################
 #                                                                             #
 #  LEXER                                                                      #
@@ -400,7 +407,6 @@ class Parser(object):
                                 (HAVING condition_list)?
                                 (INTERSECT | UNION | EXCEPT | CONTAINS sql_compound_statement)?
         """
-        # import ipdb; ipdb.set_trace()
         cond_nodes = list()
         group_by_list = list()
         having_list = list()
@@ -661,7 +667,6 @@ class Parser(object):
                     raise Exception(
                         'Attribute {} is not in the attributes for relation {}'.format(attribute.attribute, relation))
         else:
-            # import ipdb; ipdb.set_trace()
             red_flag = True
             for relation in _relations:
                 attributes = ATTRIBUTES[relation]
